@@ -136,6 +136,7 @@ class Proc(EventEmitter):
         self._container.stop()
 
     def _set_state(self, new_state):
+        self.state = new_state
         self.emit('state', new_state)
 
     def _container_set_state(self, new_state):
@@ -145,3 +146,15 @@ class Proc(EventEmitter):
             self._set_state('running')
         elif new_state == 'exit' and self.state == 'running':
             self._set_state('exit')
+
+
+class ProcRegistry(dict):
+    """Simple registry over processes."""
+
+    def __init__(self, proc_factory):
+        self.proc_factory = proc_factory
+
+    def create(self, *args, **kw):
+        proc = self.proc_factory(*args, **kw)
+        self.set(proc.name, proc)
+        return proc

@@ -12,43 +12,104 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from routes import Mapper
+from functools import partial
+from routes import Mapper, url
 from webob.dec import wsgify
-
-mapper = Mapper()
-
-
-def route(route, **kw):
-    """Decorator that allows you to map a function to a route."""
-    def delc(f):
-        mapper.connect(f.__name__, route, action=f, conditions=kw)
-        return f
-    return decl
+from webob.exc import HTTPBadRequest, HTTPNotFound
+import requests
 
 
-class RESTAPI(object):
+def _build_proc(proc):
+    """Build a proc representation."""
+    return dict(name=proc.name, image=proc.image, 
+                config=proc.config, port=proc.port, 
+                state=proc.state, command=proc.command)
+
+
+class ProcResource(object):
+    """Resource for our processes."""
+
+    def __init__(self, log, proc_registry, requests):
+        self.log = log
+        self.registry = proc_registry
+        self.requests = requests
+
+    def _get(self, id):
+        """Return process with given ID or C{None}."""
+        proc = self.registry.get(id)
+        if proc is None:
+            raise HTTPNotFound()
+        return proc
+
+    def _assert_request_data(self, request):
+        if not request.json:
+            raise HTTPBadRequest()
+        return request.json
+
+    def _state_callback(self, proc, callback_url, state):
+        """Send state change to remote URL."""
+        params = {'name': proc.name, 'port': proc.port,
+                  'state': state}
+        try:
+            self.requests.post(callback_url,
+                params=params, timeout=10, stream=False)
+        except Timeout:
+            self.log.error("timeout while sending state change to %s" % (
+                    callback_url))
+
+    def create(self, request):
+        """Create new proc."""
+        data = self._assert_request_data(request)
+        proc = self.registry.create(data['name'], data['image'],
+            data['command'], data['config'])
+        proc.on('state', partial(self._state_callback, proc,
+            data['callback']))
+
+        # we start the processes in a separate greenlet so that we do
+        # not have to wait for it to spin up.  should we do this after
+        # a while instead?
+        gevent.spawn(proc.start)
+
+        response = Response(_build_proc(proc), status=201)
+        response.header.add('Location', url('proc', id=proc.name))
+        return response
+
+    def index(self, request):
+        """Return a representation of all procs."""
+        collection = {}
+        for name, proc in self.registry.iteritems():
+            collection[name] = _build_proc(proc)
+        return Response(collection, status=200)
+
+    def show(self, request, id):
+        """Return a presentation of a proc."""
+        proc = self._get(id)
+        return Response(_build_proc(proc), status=200)
+
+    def delete(self, request, id):
+        """Stop and delete process."""
+        proc = self._get(id)
+        self.registry.pop(id, None)
+        proc.stop()
+        return Response(status=204)
+
+
+class API(object):
     """The REST API that we expose."""
 
-    @route('/proc', method='POST')
-    def create_proc(self, request):
-        """Create process."""
-        # stuff to do.
-
-    @route('/proc', method='GET')
-    def enumerate_procs(self, request):
-        """."""
-        pass
-
-    @route('/proc/{proc}')
-    def retrieve_proc(Self, request, proc):
-        """."""
+    def __init__(self, log, proc_registry, requests):
+        self.mapper = Mapper()
+        self.resources = {
+            'proc': ProcResource(log, proc_registry, requests),
+            }
+        self.mapper.collection("procs", "proc", controller='proc',
+            path_prefix='/proc', collection_actions=['index', 'create'],
+            member_actions=['show', 'delete'])
 
     @wsgify
     def __call__(self, request):
         request = Request(environ)
         route = mapper.map(request.path, request.environ)
+        resource = self.resources[route['controller']]
         action = route.pop('action')
-        return action(request, **route)
-        
-
-
+        return getattr(resource, action)(request, **route)
