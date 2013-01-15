@@ -1,0 +1,12 @@
+Routes==1.13
+WebOb==1.2.3
+argparse==1.2.1
+distribute==0.6.24
+docopt==0.5.0
+gevent==1.0dev
+glock==0.1
+greenlet==0.4.0
+pyee==0.1.0
+repoze.lru==0.6
+requests==1.1.0
+wsgiref==0.1.2
