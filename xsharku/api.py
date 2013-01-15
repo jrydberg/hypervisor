@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from functools import partial
-from routes import Mapper, url
+from routes import Mapper, URLGenerator
 from webob.dec import wsgify
 from webob.exc import HTTPBadRequest, HTTPNotFound
 import requests
@@ -29,10 +29,11 @@ def _build_proc(proc):
 class ProcResource(object):
     """Resource for our processes."""
 
-    def __init__(self, log, proc_registry, requests):
+    def __init__(self, log, mapper, proc_registry, requests):
         self.log = log
         self.registry = proc_registry
         self.requests = requests
+        self.url = URLGenerator(mapper, {})
 
     def _get(self, id):
         """Return process with given ID or C{None}."""
@@ -71,7 +72,7 @@ class ProcResource(object):
         gevent.spawn(proc.start)
 
         response = Response(_build_proc(proc), status=201)
-        response.header.add('Location', url('proc', id=proc.name))
+        response.header.add('Location', self.url('proc', id=proc.name))
         return response
 
     def index(self, request):
@@ -100,7 +101,8 @@ class API(object):
     def __init__(self, log, proc_registry, requests):
         self.mapper = Mapper()
         self.resources = {
-            'proc': ProcResource(log, proc_registry, requests),
+            'proc': ProcResource(log, self.mapper, proc_registry,
+                                 requests),
             }
         self.mapper.collection("procs", "proc", controller='proc',
             path_prefix='/proc', collection_actions=['index', 'create'],
