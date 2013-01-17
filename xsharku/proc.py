@@ -109,7 +109,7 @@ class Proc(EventEmitter):
     """Representation of a "proc" (aka process)."""
 
     def __init__(self, log, clock, image_cache,
-                 contdir, name, image, command, config,
+                 contdir, name, image, command, config, port,
                  container_boot_timeout=30):
         self.log = log
         self.clock = clock
@@ -120,6 +120,7 @@ class Proc(EventEmitter):
         self.command = command
         self.config = config
         self.state = 'init'
+        self.port = port
         self._container = Container(log, clock, self.contdir)
 
     def start(self):
@@ -151,10 +152,21 @@ class Proc(EventEmitter):
 class ProcRegistry(dict):
     """Simple registry over processes."""
 
-    def __init__(self, proc_factory):
+    def __init__(self, proc_factory, ports, randrange=random.randrange):
         self.proc_factory = proc_factory
+        self.ports = list(ports)
 
-    def create(self, *args, **kw):
-        proc = self.proc_factory(*args, **kw)
+    def create(self, name, image, command, config):
+        if not self.ports:
+            raise ValueError("OUT OF RESOURCES")
+        port = self.ports.pop(self.randrange(0, len(self.ports)))
+        proc = self.proc_factory(name, image, command, config, port)
         self.set(proc.name, proc)
         return proc
+
+    def remove(self, proc):
+        """Remove a process."""
+        self.pop(proc.name)
+        self.ports.append(proc.port)
+
+        

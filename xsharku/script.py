@@ -19,9 +19,10 @@ Usage:
   gilliam-hypervisor [options]
 
 Options:
-  -h, --help             Show this screen and exit.
-  --version              Show version and exit.
-  -p PORT, --port PORT   Listen port number [default: 6000].
+  -h, --help                Show this screen and exit.
+  --version                 Show version and exit.
+  -p PORT, --port PORT      Listen port number [default: 6000].
+  -n N, --max-num-procs N   Maximum number of procs [default: 64].
 """
 
 import logging
@@ -45,7 +46,8 @@ def main():
     image_cache = ImageCache('.')
     proc_factory = partial(Proc, logging.getLogger('proc'),
        clock, image_cache, '.')
-    proc_registry = ProcRegistry(proc_factory)
+    proc_registry = ProcRegistry(proc_factory, list(range(options[
+                    '--max-num-procs']))
     app = API(logging.getLogger('api'), proc_registry, requests.Session())
     pywsgi.WSGIServer(('', int(options['--port'])), app).serve_forever()
 
