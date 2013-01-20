@@ -21,8 +21,12 @@ Usage:
 Options:
   -h, --help                Show this screen and exit.
   --version                 Show version and exit.
+  --cache-dir PATH          App image cache dir
+                              [default: /var/lib/gilliam/cache].
+  --proc-dir PATH           Directory where proc jails live
+                              [default: /var/lib/gilliam/proc].
   -p PORT, --port PORT      Listen port number [default: 6000].
-  -n N, --max-num-procs N   Maximum number of procs [default: 64].
+  -n N, --max-procs N       Maximum number of procs [default: 64].
 """
 
 import logging
@@ -41,13 +45,14 @@ from xsharku.proc import ProcRegistry, Proc
 
 def main():
     options = docopt(__doc__, version='0.0')
+    print options
     logging.basicConfig(level=logging.DEBUG)
     clock = Clock()
-    image_cache = ImageCache('.')
+    image_cache = ImageCache(options['--cache-dir'])
     proc_factory = partial(Proc, logging.getLogger('proc'),
-       clock, image_cache, '.')
+       clock, image_cache, options['--proc-dir'])
     proc_registry = ProcRegistry(proc_factory, list(range(options[
-                    '--max-num-procs']))
+                    '--max-procs']))
     app = API(logging.getLogger('api'), proc_registry, requests.Session())
     pywsgi.WSGIServer(('', int(options['--port'])), app).serve_forever()
 

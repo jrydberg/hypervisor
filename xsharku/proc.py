@@ -168,5 +168,3 @@ class ProcRegistry(dict):
         """Remove a process."""
         self.pop(proc.name)
         self.ports.append(proc.port)
-
-        
