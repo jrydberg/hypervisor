@@ -16,8 +16,8 @@
 NAME=$1
 ROOTDIR=$2
 
-for mntpnt in (mount|grep $NAME|cut -d' ' -f3|grep ^$ROOTDIR); do
-  umount $mntpnt
+for mntpnt in `mount|grep $NAME|cut -d' ' -f3|grep ^$ROOTDIR`; do
+  umount -f $mntpnt
 done
 
 rm -rf $ROOTDIR

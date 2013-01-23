@@ -13,18 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_NAME=$1
-_ROOTDIR=$2
-_IMAGE=$3
-shift; shift; shift;
-_ARGUMENTS=$*
-
-set -e
+NAME=$1
+ROOTDIR=$2
+IMAGE=$3
+CONFIG=$4
+shift; shift; shift; shift;
+COMMAND=$*
+echo $COMMAND
 
 # Step 1.  Setup the jail.
-mkdir -p $_ROOTDIR
-cd $_ROOTDIR
-mkdir -p etc proc sys user sbin bin lib lib64 dev app
+mkdir -p $ROOTDIR
+cd $ROOTDIR
+mkdir -p etc proc sys usr sbin bin lib lib64 dev app
 
 cat <<EOF > etc/resolv.conf
 # Use host resolv.conf
@@ -47,8 +47,11 @@ cat <<EOF > etc/hosts
 127.0.0.1       localhost
 EOF
 
-cp /etc/passwd etc/passwd
-cp /etc/group etc/group
+egrep "^(root|gilliam)" /etc/passwd > etc/passwd
+egrep "^(root|gilliam)" /etc/group > etc/group
+egrep "^(root|gilliam)" /etc/shadow > etc/shadow
+cp -r /etc/pam.* etc/
+cp /etc/login.defs etc/
 
 # Setup the dev nodes.
 mknod -m 666 dev/null c 1 3
@@ -65,12 +68,16 @@ mkdir -m 1777 dev/shm
 mkdir -m 1777 dev/fd
 
 # Mount directories.
-for mntpnt in proc sys usr bin sbin lib lib64 dev/pts dev/shm; do
-  mount --rbind /$mntpnt $_ROOTDIR/$mntpnt
+for mntpnt in proc usr bin sbin lib lib64 dev/pts dev/shm; do
+  mount --rbind /$mntpnt $ROOTDIR/$mntpnt
 done
 
 # Extract the app.
-(cd $_ROOTDIR/app && tar zxf $_IMAGE)
+(cd $ROOTDIR/app && tar zxf $IMAGE && chown -R gilliam:gilliam .)
+
+# Copy in the config.
+echo "set -a" >> $ROOTDIR/app/.profile
+cat $CONFIG >> $ROOTDIR/app/.profile
 
 # Start the runner inside the jail.
-chroot -u gilliam $_ROOTDIR $_ARGUMENTS
+chroot $PWD /bin/su -l gilliam -c "$COMMAND"
