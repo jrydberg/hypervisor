@@ -115,6 +115,7 @@ class Proc(EventEmitter):
 
     def start(self):
         """Provision a virtual machine for this proc."""
+        self.config.update({'PORT': str(self.port)})
         self._container.on('state', self._set_state)
         self._container.start(self._get_image(), self.config, self.command)
 
