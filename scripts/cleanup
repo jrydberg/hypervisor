@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/bin/bash
 # Copyright 2013 Johan Rydberg.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,5 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from xsharku import script
-script.main()
+CACHE_DIR=/var/lib/gilliam/proc
+
+NAME=$1
+ROOTDIR=$CACHE_DIR/$1
+
+for mntpnt in `mount|grep $NAME|cut -d' ' -f3|grep ^$ROOTDIR`; do
+  umount -f $mntpnt
+done
+
+rm -rf $ROOTDIR

@@ -14,9 +14,12 @@
 
 from functools import partial
 from routes import Mapper, URLGenerator
+from webob import Response
 from webob.dec import wsgify
 from webob.exc import HTTPBadRequest, HTTPNotFound
 import requests
+from requests.exceptions import RequestException
+import gevent
 
 
 def _build_proc(proc):
@@ -51,14 +54,19 @@ class ProcResource(object):
         """Send state change to remote URL."""
         params = {'name': proc.name, 'port': proc.port,
                   'state': state}
+        self.log.info("send state update for proc %s new state %s" % (
+                proc.name, state))
         try:
-            self.requests.post(callback_url,
+            response = self.requests.post(callback_url,
                 params=params, timeout=10, stream=False)
-        except Timeout:
+            response.read()
+        except requests.Timeout:
             self.log.error("timeout while sending state change to %s" % (
                     callback_url))
+        except RequestException:
+            self.log.exception("could not send state update")
 
-    def create(self, request):
+    def create(self, request, **kwargs):
         """Create new proc."""
         data = self._assert_request_data(request)
         proc = self.registry.create(data['name'], data['image'],
@@ -71,27 +79,27 @@ class ProcResource(object):
         # a while instead?
         gevent.spawn(proc.start)
 
-        response = Response(_build_proc(proc), status=201)
-        response.header.add('Location', self.url('proc', id=proc.name))
+        response = Response(json=_build_proc(proc), status=201)
+        response.headers.add('Location', self.url('proc', id=proc.name))
         return response
 
-    def index(self, request):
+    def index(self, request, format=None):
         """Return a representation of all procs."""
         collection = {}
         for name, proc in self.registry.iteritems():
             collection[name] = _build_proc(proc)
-        return Response(collection, status=200)
+        return Response(json=collection, status=200)
 
-    def show(self, request, id):
+    def show(self, request, id, format=None):
         """Return a presentation of a proc."""
         proc = self._get(id)
-        return Response(_build_proc(proc), status=200)
+        return Response(json=_build_proc(proc), status=200)
 
-    def delete(self, request, id):
+    def delete(self, request, id, format=None):
         """Stop and delete process."""
         proc = self._get(id)
-        self.registry.pop(id, None)
         proc.stop()
+        self.registry.remove(proc)
         return Response(status=204)
 
 
@@ -110,8 +118,9 @@ class API(object):
 
     @wsgify
     def __call__(self, request):
-        request = Request(environ)
-        route = mapper.map(request.path, request.environ)
-        resource = self.resources[route['controller']]
+        route = self.mapper.match(request.path, request.environ)
+        if route is None:
+            raise HTTPNotFound()
+        resource = self.resources[route.pop('controller')]
         action = route.pop('action')
         return getattr(resource, action)(request, **route)

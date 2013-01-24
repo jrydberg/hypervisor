@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from gevent.event import AsyncResult
+import os.path
 
 class ImageCache(object):
     """An image cache."""
@@ -21,4 +23,6 @@ class ImageCache(object):
 
     def get(self, image_url):
         """.."""
-        return AsyncResult()
+        result = AsyncResult()
+        result.set(os.path.join(self.dir, image_url))
+        return result

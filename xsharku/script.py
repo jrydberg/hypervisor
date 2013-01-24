@@ -23,9 +23,10 @@ Options:
   --version                 Show version and exit.
   --cache-dir PATH          App image cache dir
                               [default: /var/lib/gilliam/cache].
-  --proc-dir PATH           Directory where proc jails live
-                              [default: /var/lib/gilliam/proc].
+  --script-dir PATH         Directory where provisioning scripts live.
+                              [default: /var/lib/gilliam/scripts].
   -p PORT, --port PORT      Listen port number [default: 6000].
+  --base-port BASEPORT      Base port for procs [default: 5000].
   -n N, --max-procs N       Maximum number of procs [default: 64].
 """
 
@@ -50,9 +51,10 @@ def main():
     clock = Clock()
     image_cache = ImageCache(options['--cache-dir'])
     proc_factory = partial(Proc, logging.getLogger('proc'),
-       clock, image_cache, options['--proc-dir'])
-    proc_registry = ProcRegistry(proc_factory, list(range(options[
-                    '--max-procs']))
+       clock, image_cache, options['--script-dir'])
+    ports = [int(options['--base-port']) + i
+             for i in range(int(options[ '--max-procs']))]
+    proc_registry = ProcRegistry(proc_factory, ports)
     app = API(logging.getLogger('api'), proc_registry, requests.Session())
     pywsgi.WSGIServer(('', int(options['--port'])), app).serve_forever()
 
