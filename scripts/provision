@@ -13,72 +13,39 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-CACHE_DIR=/var/lib/gilliam/proc
+BASEDIR=/var/lib/gilliam
+PROCDIR=$BASEDIR/proc
+TEMPLATE=$BASEDIR/template
 
 NAME=$1
-ROOTDIR=$CACHE_DIR/$NAME
+ROOTDIR=$PROCDIR/$NAME
 IMAGE=$2
 CONFIG=$3
 shift; shift; shift;
 COMMAND=$*
 
-# Step 1.  Setup the jail.
-mkdir -p $ROOTDIR
-cd $ROOTDIR
-mkdir -p etc proc sys usr sbin bin lib lib64 dev app
+set -e
 
-cat <<EOF > etc/resolv.conf
-# Use host resolv.conf
-`cat /etc/resolv.conf`
+# Step 1. Copy the template
+cp -ra $TEMPLATE $ROOTDIR
 
-# Also use google DNS
-nameserver 8.8.8.8
-nameserver 8.8.4.4
-EOF
+# Step 2. Mount key system directories.
+mount -t proc proc $ROOTDIR/proc
+mount -t sysfs sys $ROOTDIR/sys
+mount --bind /dev/pts $ROOTDIR/dev/pts
+mount --bind /dev/shm $ROOTDIR/dev/shm
 
-cat <<EOF > etc/nsswitch.conf
-hosts: files dns
-EOF
+# Step 3. Extract the app.
+#
+# We need to chroot into the jail to be able to change ownership of
+# the files since the gilliam user only exists inside the jail.
+mkdir -p $ROOTDIR/app
+(cd $ROOTDIR/app && tar zxf $IMAGE)
+chroot $ROOTDIR /bin/chown -R gilliam:gilliam /app
 
-cat <<EOF > etc/hostname
-$NAME
-EOF
-
-cat <<EOF > etc/hosts
-127.0.0.1       localhost
-EOF
-
-egrep "^(root|gilliam)" /etc/passwd > etc/passwd
-egrep "^(root|gilliam)" /etc/group > etc/group
-egrep "^(root|gilliam)" /etc/shadow > etc/shadow
-cp -r /etc/pam.* etc/
-cp /etc/login.defs etc/
-
-# Setup the dev nodes.
-mknod -m 666 dev/null c 1 3
-mknod -m 666 dev/zero c 1 5
-mknod -m 666 dev/random c 1 8
-mknod -m 666 dev/urandom c 1 9
-mknod -m 666 dev/tty c 5 0
-mknod -m 600 dev/console c 5 1
-mknod -m 666 dev/tty0 c 4 0
-mknod -m 666 dev/full c 1 7
-mknod -m 666 dev/ptmx c 5 2
-mkdir -m 755 dev/pts
-mkdir -m 1777 dev/shm
-mkdir -m 1777 dev/fd
-
-# Mount directories.
-for mntpnt in proc usr bin sbin lib lib64 dev/pts dev/shm; do
-  mount --rbind /$mntpnt $ROOTDIR/$mntpnt
-done
-
-# Extract the app.
-(cd $ROOTDIR/app && tar zxf $IMAGE && chown -R gilliam:gilliam .)
-
-# Copy in the config.
+# Step 4. Copy in the config.
 echo "set -a" >> $ROOTDIR/app/.profile
 cat $CONFIG >> $ROOTDIR/app/.profile
 
-# Start the runner inside the jail.
-chroot $PWD /bin/su -l gilliam -c "$COMMAND"
+# Step 5. Final step. Start the process, as the app user.
+exec chroot $ROOTDIR /bin/su -l gilliam -c "$COMMAND"

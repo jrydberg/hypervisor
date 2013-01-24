@@ -13,13 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-CACHE_DIR=/var/lib/gilliam/proc
+BASEDIR=/var/lib/gilliam
+PROCDIR=$BASEDIR/proc
 
 NAME=$1
-ROOTDIR=$CACHE_DIR/$1
+ROOTDIR=$PROCDIR/$NAME
 
-for mntpnt in `mount|grep $NAME|cut -d' ' -f3|grep ^$ROOTDIR`; do
-  umount -f $mntpnt
-done
-
+umount -f $ROOTDIR/proc
+umount -f $ROOTDIR/sys
+umount -f $ROOTDIR/dev/pts
+umount -f $ROOTDIR/dev/shm
 rm -rf $ROOTDIR
