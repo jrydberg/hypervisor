@@ -64,16 +64,18 @@ class Container(EventEmitter):
         self._config_file = tempfile.NamedTemporaryFile()
         for key, value in config.items():
             self._config_file.write('%s=%r\n' % (key, value))
+        self._config_file.flush()
         return self._config_file.name
+
+    def _finish(self, state):
+        self._set_state(state)
+        self._config_file.close()
+        del self._config_file
+        self._cleanup().wait()
 
     def _proc_event(self, event):
         """Event from the process."""
-        def execute():
-            self._set_state('done' if event.get() == 0 else 'fail')
-            self._config_file.close()
-            del self._config_file
-            self._cleanup().wait()
-        gevent.spawn(execute)
+        gevent.spawn(self._finish, 'done' if event.get() == 0 else 'fail')
 
     def _spawn(self, image, config, command):
         # spawn the container and wait for it
@@ -85,11 +87,16 @@ class Container(EventEmitter):
 
     def _provision(self, image, config, command):
         script_path = os.path.join(self.script_path, 'provision')
-        print "START", script_path, self.name, image, config, command
-        return subprocess.Popen([script_path, self.name, image,
-                                 config, command],
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE)
+        self.log.info("START %s %s %s %r %r" % (script_path, self.name,
+                                                image, config, command))
+        try:
+            return subprocess.Popen([script_path, self.name, image,
+                                     config, command],
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE)
+        except OSError:
+            self.log.exception('fail to spawn provisioning script')
+            self._finish('fail')
 
     def _cleanup(self):
         script_path = os.path.join(self.script_path, 'cleanup')
