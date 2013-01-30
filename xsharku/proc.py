@@ -107,7 +107,8 @@ class Proc(EventEmitter):
     """Representation of a "proc" (aka process)."""
 
     def __init__(self, log, clock, image_cache,
-                 script_dir, name, image, command, config, port):
+                 script_dir, default_config, name, image,
+                 command, config, port):
         EventEmitter.__init__(self)
         self.log = log
         self.clock = clock
@@ -118,13 +119,15 @@ class Proc(EventEmitter):
         self.config = config
         self.state = 'init'
         self.port = port
+        self.default_config = default_config
+        self.default_config.update({'PORT': str(self.port)})
         self._container = Container(log, clock, script_dir, name)
 
     def start(self):
         """Provision a virtual machine for this proc."""
-        self.config.update({'PORT': str(self.port)})
-        self._container.on('state', self._set_state)
-        self._container.start(self._get_image(), self.config, self.command)
+        config = self.default_config.copy()
+        config.update(self.config)
+        self._container.start(self._get_image(), config, self.command)
 
     def _get_image(self):
         return self.image_cache.get(self.image).get()

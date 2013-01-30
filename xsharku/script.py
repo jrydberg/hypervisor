@@ -16,9 +16,10 @@
 
 Usage:
   gilliam-hypervisor -h | --help
-  gilliam-hypervisor [options]
+  gilliam-hypervisor [--export NAME]... [options]
 
 Options:
+  -e, --export NAME         Export environment variable.
   -h, --help                Show this screen and exit.
   --version                 Show version and exit.
   --cache-dir PATH          App image cache dir
@@ -34,6 +35,7 @@ import logging
 from docopt import docopt
 from gevent import pywsgi, monkey
 monkey.patch_all(thread=False, time=False)
+import os
 
 import requests
 from functools import partial
@@ -50,8 +52,12 @@ def main():
     logging.basicConfig(level=logging.DEBUG)
     clock = Clock()
     image_cache = ImageCache(options['--cache-dir'])
+    default_config = {}
+    for var in options['--export']:
+        if var in os.environ:
+            default_config[var] = os.environ[var]
     proc_factory = partial(Proc, logging.getLogger('proc'),
-       clock, image_cache, options['--script-dir'])
+       clock, image_cache, options['--script-dir'], default_config)
     ports = [int(options['--base-port']) + i
              for i in range(int(options[ '--max-procs']))]
     proc_registry = ProcRegistry(proc_factory, ports)
