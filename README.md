@@ -1,11 +1,31 @@
-# Sharku, a simple hypervisor for 12 factor applications
+# The Hypervisor
 
-So this is a really simple proof-of-concept hypervisor for Gilliam.
-It provides a REST interface that allows other parties to create
+This is a really chrootin proof-of-content hypevisor for Gilliam.
 "procs" (applications running inside an somewhat isolated container).
 
+Right now it is not possible to install the beast, so you need do
+some hackery to get it working:
 
+First set up your virtualenv and install the requirements.
 
+    $ virtualenv env
+    $ env/bin/pip install -r requirements.txt
+
+Now, as root, you need to create a few directories:
+
+    $ sudo mkdir -p /var/lib/gilliam/proc /var/lib/gilliam/cache
+
+Since we do not have a buildserver at this point, nor do we have code
+to fetch data from a remote location, just copy your app into the
+cache directory.  If you have an app, that is.
+
+    $ sudo cp app.tar.gz /var/lib/gilliam/cache
+
+Now you can start the hypervisor with this intuitive commandline:
+
+    $ sudo PYTHONPATH=$PWD env/bin/python bin/gilliam-hypervisor --script-dir $PWD/scripts
+
+Don't forget to set up your template container. 
 
 # Preparing Template Container
 
