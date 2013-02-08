@@ -53,9 +53,10 @@ def main():
     clock = Clock()
     image_cache = ImageCache(options['--cache-dir'])
     default_config = {}
-    for var in options['--export']:
-        if var in os.environ:
-            default_config[var] = os.environ[var]
+    if options['--export']:
+        for var in options['--export']:
+            if var in os.environ:
+                default_config[var] = os.environ[var]
     proc_factory = partial(Proc, logging.getLogger('proc'),
        clock, image_cache, options['--script-dir'], default_config)
     ports = [int(options['--base-port']) + i
