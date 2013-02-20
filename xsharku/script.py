@@ -12,27 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""gilliam-hypervisor xx
-
-Usage:
-  gilliam-hypervisor -h | --help
-  gilliam-hypervisor [--export NAME]... [options]
-
-Options:
-  -e, --export NAME         Export environment variable.
-  -h, --help                Show this screen and exit.
-  --version                 Show version and exit.
-  --cache-dir PATH          App image cache dir
-                              [default: /var/lib/gilliam/cache].
-  --script-dir PATH         Directory where provisioning scripts live.
-                              [default: /var/lib/gilliam/scripts].
-  -p PORT, --port PORT      Listen port number [default: 6000].
-  --base-port BASEPORT      Base port for procs [default: 5000].
-  -n N, --max-procs N       Maximum number of procs [default: 64].
-"""
-
 import logging
-from docopt import docopt
 from gevent import pywsgi, monkey
 monkey.patch_all(thread=False, time=False)
 import os
@@ -47,22 +27,33 @@ from xsharku.proc import ProcRegistry, Proc
 
 
 def main():
-    options = docopt(__doc__, version='0.0')
-    print options
-    logging.basicConfig(level=logging.DEBUG)
-    clock = Clock()
-    image_cache = ImageCache(options['--cache-dir'])
+    # get logging running
+    format = '%(levelname)-8s %(name)s: %(message)s'
+    logging.basicConfig(level=logging.DEBUG, format=format)
+    # setup config
+    options = os.environ
+    cache_dir = os.path.join(os.getcwd(), options['IMAGE_DIR'])
+    script_dir = os.path.join(os.getcwd(), options['SCRIPT_DIR'])
+    base_port = int(options['BASE_PORT'])
+    exports = options.get('EXPORTS', '').split(',')
+    max_procs = int(options.get('MAX_PROCS', '8'))
+    # default config
     default_config = {}
-    if options['--export']:
-        for var in options['--export']:
-            if var in os.environ:
-                default_config[var] = os.environ[var]
+    for var in exports:
+        if var in os.environ:
+            default_config[var] = os.environ[var]
+    # wiring
+    clock = Clock()
+    image_cache = ImageCache(cache_dir)
     proc_factory = partial(Proc, logging.getLogger('proc'),
-       clock, image_cache, options['--script-dir'], default_config)
-    ports = [int(options['--base-port']) + i
-             for i in range(int(options[ '--max-procs']))]
+       clock, image_cache, script_dir, default_config)
+    ports = [(base_port + i) for i in range(max_procs)]
     proc_registry = ProcRegistry(proc_factory, ports)
     app = API(logging.getLogger('api'), proc_registry, requests.Session())
-    pywsgi.WSGIServer(('', int(options['--port'])), app).serve_forever()
+    # serve
+    logging.info("Start serving requests on %d" % (int(options['PORT']),))
+    pywsgi.WSGIServer(('', int(options['PORT'])), app).serve_forever()
 
 
+if __name__ == '__main__':
+    main()
