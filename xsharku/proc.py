@@ -16,10 +16,12 @@ from functools import partial
 import random
 import tempfile
 import os.path
+import os
 from gevent import subprocess
 import gevent
 
 from pyee import EventEmitter
+
 
 class _OutputReader(object):
     """Read output from a file."""
@@ -93,7 +95,8 @@ class Container(EventEmitter):
             return subprocess.Popen([script_path, self.name, image,
                                      config, command],
                                     stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE)
+                                    stderr=subprocess.PIPE,
+                                    cwd=os.getcwd())
         except OSError:
             self.log.exception('fail to spawn provisioning script')
             self._finish('fail')

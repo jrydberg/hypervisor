@@ -44,8 +44,9 @@ mkdir -p $ROOTDIR/app
 chroot $ROOTDIR /bin/chown -R gilliam:gilliam /app
 
 # Step 4. Copy in the config.
-echo "set -a" >> $ROOTDIR/app/.profile
-cat $CONFIG >> $ROOTDIR/app/.profile
+#echo "set -a" >> $ROOTDIR/app/.profile
+#cat $CONFIG >> $ROOTDIR/app/.profile
 
 # Step 5. Final step. Start the process, as the app user.
-exec chroot $ROOTDIR /bin/su -l gilliam -c "$COMMAND"
+exec python -m xsharku.runner --name $NAME --env $CONFIG --user gilliam $ROOTDIR -- $COMMAND
+#exec chroot $ROOTDIR /bin/su -l gilliam -c "$COMMAND"
