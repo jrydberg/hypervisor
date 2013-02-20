@@ -56,7 +56,10 @@ class Container(EventEmitter):
     def stop(self):
         if self._proc is not None:
             # FIXME: do more here.
-            self._proc.terminate()
+            try:
+                self._proc.terminate()
+            except OSError:
+                pass
 
     def _set_state(self, state):
         self.state = state
