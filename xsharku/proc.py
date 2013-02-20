@@ -113,12 +113,14 @@ class Proc(EventEmitter):
     """Representation of a "proc" (aka process)."""
 
     def __init__(self, log, clock, image_cache,
-                 script_dir, default_config, name, image,
+                 script_dir, default_config, id, app, name, image,
                  command, config, port):
         EventEmitter.__init__(self)
         self.log = log
         self.clock = clock
         self.image_cache = image_cache
+        self.id = id
+        self.app = app
         self.name = name
         self.image = image
         self.command = command
@@ -156,15 +158,15 @@ class ProcRegistry(dict):
         self.ports = list(ports)
         self.randrange = randrange
 
-    def create(self, name, image, command, config):
+    def create(self, id, app, name, image, command, config):
         if not self.ports:
             raise ValueError("OUT OF RESOURCES")
         port = self.ports.pop(self.randrange(0, len(self.ports)))
-        proc = self.proc_factory(name, image, command, config, port)
-        self.update({proc.name: proc})
+        proc = self.proc_factory(id, app, name, image, command, config, port)
+        self.update({proc.id: proc})
         return proc
 
     def remove(self, proc):
         """Remove a process."""
-        self.pop(proc.name)
+        self.pop(proc.id)
         self.ports.append(proc.port)

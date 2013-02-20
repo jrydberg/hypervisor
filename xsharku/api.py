@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import uuid
 from functools import partial
 from routes import Mapper, URLGenerator
 from webob import Response
@@ -24,9 +25,10 @@ import gevent
 
 def _build_proc(proc):
     """Build a proc representation."""
-    return dict(name=proc.name, image=proc.image, 
-                config=proc.config, port=proc.port, 
-                state=proc.state, command=proc.command)
+    return dict(app=proc.app, name=proc.name,
+                image=proc.image, config=proc.config,
+                port=proc.port, state=proc.state,
+                command=proc.command)
 
 
 class ProcResource(object):
@@ -68,8 +70,9 @@ class ProcResource(object):
     def create(self, request, **kwargs):
         """Create new proc."""
         data = self._assert_request_data(request)
-        proc = self.registry.create(data['name'], data['image'],
-            data['command'], data['config'])
+        id = str(uuid.uuid4())
+        proc = self.registry.create(id, data['app'], data['name'],
+            data['image'], data['command'], data['config'])
         proc.on('state', partial(self._state_callback, proc,
             data['callback']))
 
@@ -85,8 +88,8 @@ class ProcResource(object):
     def index(self, request, format=None):
         """Return a representation of all procs."""
         collection = {}
-        for name, proc in self.registry.iteritems():
-            collection[name] = _build_proc(proc)
+        for id, proc in self.registry.iteritems():
+            collection[id] = _build_proc(proc)
         return Response(json=collection, status=200)
 
     def show(self, request, id, format=None):
