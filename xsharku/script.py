@@ -16,6 +16,7 @@ import logging
 from gevent import pywsgi, monkey
 monkey.patch_all(thread=False, time=False)
 import os
+import socket
 
 import requests
 from functools import partial
@@ -24,6 +25,7 @@ from glock.clock import Clock
 from xsharku.api import API
 from xsharku.image import ImageCache
 from xsharku.proc import ProcRegistry, Proc
+from xsharku.runner import Container, Runner
 
 
 def main():
@@ -34,6 +36,7 @@ def main():
     options = os.environ
     cache_dir = os.path.join(os.getcwd(), options['IMAGE_DIR'])
     script_dir = os.path.join(os.getcwd(), options['SCRIPT_DIR'])
+    proc_dir = os.path.join(os.getcwd(), options['PROC_DIR'])
     base_port = int(options['BASE_PORT'])
     exports = options.get('EXPORTS', '').split(',')
     max_procs = int(options.get('MAX_PROCS', '8'))
@@ -45,8 +48,21 @@ def main():
     # wiring
     clock = Clock()
     image_cache = ImageCache(cache_dir)
-    proc_factory = partial(Proc, logging.getLogger('proc'),
-       clock, image_cache, script_dir, default_config)
+
+    def container_factory(id, app, name):
+        logname = 'container.%s' % (id,)
+        return Container(logging.getLogger(logname), clock,
+            script_dir, os.path.join(proc_dir, id), app, name,
+            'gilliam')
+
+    def proc_factory(id, app, name, image, command, app_config, port):
+        config = default_config.copy()
+        config.update(app_config)
+        config.update({'PORT': str(port), 'HOST': socket.getfqdn()})
+        return Proc(logging.getLogger('proc.%s' % (id,)),
+            clock, image_cache, container_factory(id, app, name),
+            id, app, name, image, command, config, port)
+
     ports = [(base_port + i) for i in range(max_procs)]
     proc_registry = ProcRegistry(proc_factory, ports)
     app = API(logging.getLogger('api'), proc_registry, requests.Session())

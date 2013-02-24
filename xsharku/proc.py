@@ -23,98 +23,11 @@ import gevent
 from pyee import EventEmitter
 
 
-class _OutputReader(object):
-    """Read output from a file."""
-
-    def __init__(self, log, proc_name, file):
-        self.log = log
-        self.proc_name = proc_name
-        self.file = file
-        gevent.spawn(self._reader)
-
-    def _reader(self):
-        for line in self.file:
-            self.log.info("%s: %s" % (self.proc_name, line))
-
-
-class Container(EventEmitter):
-    """The virtual machine."""
-
-    def __init__(self, log, clock, script_path, name):
-        EventEmitter.__init__(self)
-        self.log = log
-        self.script_path = script_path
-        self.name = name
-        self.state = 'init'
-        self._proc = None
-        self._config_file = None
-        
-    def start(self, image, config, command):
-        self._set_state('running')
-        self._spawn(image, config, command)
-
-    def stop(self):
-        if self._proc is not None:
-            # FIXME: do more here.
-            try:
-                self._proc.terminate()
-            except OSError:
-                pass
-
-    def _set_state(self, state):
-        self.state = state
-        self.emit('state', state)
-
-    def _write_config(self, config):
-        self._config_file = tempfile.NamedTemporaryFile()
-        for key, value in config.items():
-            self._config_file.write('%s=%r\n' % (key, value))
-        self._config_file.flush()
-        return self._config_file.name
-
-    def _finish(self, state):
-        self._set_state(state)
-        self._config_file.close()
-        del self._config_file
-        self._cleanup().wait()
-
-    def _proc_event(self, event):
-        """Event from the process."""
-        gevent.spawn(self._finish, 'done' if event.get() == 0 else 'fail')
-
-    def _spawn(self, image, config, command):
-        # spawn the container and wait for it
-        self._proc = self._provision(image, self._write_config(config),
-                                     command)
-        self._proc.result.rawlink(self._proc_event)
-        _OutputReader(self.log, self.name, self._proc.stdout)
-        _OutputReader(self.log, self.name, self._proc.stderr)
-
-    def _provision(self, image, config, command):
-        script_path = os.path.join(self.script_path, 'provision')
-        self.log.info("START %s %s %s %r %r" % (script_path, self.name,
-                                                image, config, command))
-        try:
-            return subprocess.Popen([script_path, self.name, image,
-                                     config, command],
-                                    stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE,
-                                    cwd=os.getcwd())
-        except OSError:
-            self.log.exception('fail to spawn provisioning script')
-            self._finish('fail')
-
-    def _cleanup(self):
-        script_path = os.path.join(self.script_path, 'cleanup')
-        return subprocess.Popen([script_path, self.name])
-
-
 class Proc(EventEmitter):
     """Representation of a "proc" (aka process)."""
 
-    def __init__(self, log, clock, image_cache,
-                 script_dir, default_config, id, app, name, image,
-                 command, config, port):
+    def __init__(self, log, clock, image_cache, container, id, app, name,
+                 image, command, config, port):
         EventEmitter.__init__(self)
         self.log = log
         self.clock = clock
@@ -125,20 +38,19 @@ class Proc(EventEmitter):
         self.image = image
         self.command = command
         self.config = config
-        self.state = 'init'
         self.port = port
-        self.default_config = default_config
-        self.default_config.update({'PORT': str(self.port)})
-        self._container = Container(log, clock, script_dir, name)
+        self.state = 'init'
+        self._container = container
 
     def start(self):
         """Provision a virtual machine for this proc."""
         self._container.on('state', self._set_state)
-        config = self.default_config.copy()
-        config.update(self.config)
-        self._container.start(self._get_image(), config, self.command)
+        self._container.start(self._get_image(), self.config, self.command)
 
     def _get_image(self):
+        """Retrieve the image from the cache and return an absolute
+        path to it.
+        """
         return self.image_cache.get(self.image).get()
 
     def stop(self):

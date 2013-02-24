@@ -13,11 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-BASEDIR=/var/lib/gilliam
-PROCDIR=$BASEDIR/proc
-
-NAME=$1
-ROOTDIR=$PROCDIR/$NAME
+ROOTDIR=$1
 
 umount -f $ROOTDIR/proc
 umount -f $ROOTDIR/sys

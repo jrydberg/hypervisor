@@ -12,29 +12,97 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""App proc runner that takes care for isolation and possibly in the
-future logging and metrics.
-
-Usage: gilliam-runner [options] <DIR> [--] <COMMAND> [<ARGS>...]
-
-Options:
-    -h, --help         Display this help text and exit.
-    --name NAME        Name of the container.
-    --user USER        Change to USER before starting command.
-    --env ENV          Read environment variables from ENV
-    --memlimit LIMIT   Kill process if memory limit is exceeded.
-"""
-
-from docopt import docopt
+from functools import partial
 import gevent
 from gevent.event import Event, AsyncResult
+from gevent.os import make_nonblocking, nb_read, nb_write
+from gevent.hub import get_hub
 from gevent import subprocess
+import json
+from pyee import EventEmitter
 import os
+import os.path
 import pwd
 import psutil
 import re
+import logging
+from logging.handlers import SysLogHandler
 import signal
+import sys
 import unshare
+import procname
+
+
+class Container(EventEmitter):
+    """The virtual machine."""
+
+    def __init__(self, log, clock, script_path, dir, app, name, user):
+        EventEmitter.__init__(self)
+        self.log = log
+        self.clock = clock
+        self.script_path = script_path
+        self.dir = dir
+        self.app = app
+        self.name = name
+        self.user = user
+        self.state = 'init'
+        self.runner = None
+        
+    def start(self, image, config, command):
+        self._provision(image)
+        self._spawn(config, command)
+
+    def _spawn(self, config, command):
+        self.runner = subprocess.Popen([sys.executable, '-m', __name__],
+            stdin=subprocess.PIPE) #stdout=subprocess.PIPE,
+        #    stderr=subprocess.STDOUT, cwd=self.dir)
+        self.runner.rawlink(partial(gevent.spawn, self._child))
+        self._set_state('running')
+        cmd = {'command': command, 'config': config,
+               'app': self.app, 'name': self.name, 'dir': self.dir,
+               'user': self.user}
+        self.runner.stdin.write(json.dumps(cmd) + '\n')
+        self.runner.stdin.close()
+
+    # FIXME: I wish there was a decorator for this in gevent.
+    def stop(self):
+        def _stop():
+            for tosleep in [1, 3, 5]:
+                if self.runner is None:
+                    break
+                self.runner.terminate()
+                self.clock.sleep(tosleep)
+            else:
+                if self.runner is not None:
+                    self.runner.kill()
+        gevent.spawn(_stop)
+
+    def _set_state(self, state):
+        self.log.info("state changed to %r" % (state,))
+        self.state = state
+        self.emit('state', state)
+
+    def _child(self, popen):
+        self.runner = None
+        self._set_state('done' if not popen.returncode else 'fail')
+        self._cleanup().wait()
+
+    def _provision(self, image):
+        script_path = os.path.join(self.script_path, 'provision')
+        self._set_state('boot')
+        try:
+            popen = subprocess.Popen([script_path, str(self.dir), str(image)],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                cwd=os.getcwd())
+            popen.wait()
+            # FIXME: xxx, resultcode
+        except OSError:
+            self.log.exception('fail to spawn provisioning script')
+            self._finish('fail')
+
+    def _cleanup(self):
+        script_path = os.path.join(self.script_path, 'cleanup')
+        return subprocess.Popen([script_path, self.dir])
 
 
 # FIXME: This is for Ubuntu only and only tested on 12.04 LTS
@@ -72,65 +140,69 @@ def chuser(user):
     os.chdir(pwnam.pw_dir)
 
 
-def parse_limit(limit):
-    suffixes = {'k': 1024, 'm': 1024*1024,
-                'g': 1024*1024*1024}
-    m1 = re.match(r'\A([0-9]+)([mMkKgG])\Z', limit)
-    return int(m1.group(1)) * suffixes[m1.group(2).lower()]
-
-
 class Runner(object):
-    """Runner."""
+    """The runner is responsible for starting the "proc" command
+    and monitoring the process.
+    """
 
-    def __init__(self, name, dir, user=None, envfile=None, memlimit=None):
+    def __init__(self, app, name, dir, user, interval=1):
+        self.app = app
         self.name = name
         self.dir = dir
         self.user = user
-        self.envfile = envfile
         self._term_event = Event()
         self._process = None
-        self._memlimit = parse_limit(memlimit) if memlimit else None
-    
-    def run(self, args):
+        self._memlimit = None
+        self._interval = interval
+
+    def start(self, config, command):
         self.prepare()
-        environ = self._read_env() if self.envfile else {}
         os.chdir(self.dir)
         os.chroot(self.dir)
+        # FIXME: or should we get the name before chdir and chroot?
         # change user _after_ we change root.  we do the "getpwnam"
         # inside the jail.
-        if self.user:
-            chuser(self.user)
+        chuser(self.user)
         self.setup_signals()
-        self.execute(args, environ)
+        self.execute(command, config)
         return self.monitor()
 
     def prepare(self):
+        # FIXME: we do not really need this I think.
         unshare.unshare(unshare.CLONE_NEWUTS)
         sethostname(self.name)
+        dir = os.path.basename(self.dir)
+        procname.setprocname("runner[%s]: %s %s" % (dir, self.app,
+                                                    self.name))
 
     def setup_signals(self):
         gevent.signal(signal.SIGTERM, self._term_event.set)
         gevent.signal(signal.SIGINT, self._term_event.set)
 
-    def execute(self, args, environ):
+    def execute(self, command, environ):
         """Execute the program."""
         environ.update(self._make_environ())
-        print [repr(a) for a in args]
-        self.popen = subprocess.Popen(['/bin/bash', '-l', '-c',
-                                       ' '.join(args)], env=environ)
+        self.popen = subprocess.Popen(['/bin/bash', '-l', '-c', command],
+            env=environ, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        # start the reader that consumers output from the process and
+        # writes it to our log.
+        self._log_read = _OutputReader(logging.getLogger('output'), self.name,
+                                       self.popen.stdout)
 
     def monitor(self):
         """Monitor the executed program."""
         while True:
             try:
                 event = waitany([self.popen.result, self._term_event],
-                                timeout=1)
+                                timeout=self._interval)
             except gevent.Timeout:
                 self._monitor_usage()
             else:
                 if event is self.popen.result:
                     break
                 elif event is self._term_event:
+                    logging.info("GOT TERM EVENT")
+                    self.popen.terminate()
                     break
 
     def _monitor_usage(self):
@@ -144,44 +216,36 @@ class Runner(object):
 
     def _make_environ(self):
         """Construct an environment for the app."""
-        environ = {}
-        if not self.user:
-            for key in ('TERM', 'SHELL', 'USER', 'LOGNAME', 'HOME'):
-                environ[key] = os.getenv(key)
-        else:
-            pwnam = pwd.getpwnam(self.user)
-            environ.update({
-                'TERM': os.getenv('TERM'), 'SHELL': pwnam.pw_shell,
-                'USER': pwnam.pw_name, 'LOGNAME': pwnam.pw_name,
-                'HOME': pwnam.pw_dir
-                })
-        return environ
-
-    def _parse_env_line(self, line):
-        m1 = re.match(r'\A([A-Za-z_0-9]+)=(.*)\Z', line)
-        key, val = m1.group(1), m1.group(2)
-        m2 = re.match(r"\A'(.*)'\Z", val)
-        if m2:
-            val = m2.group(1)
-        m3 = re.match(r'\A"(.*)"\Z', val)
-        if m3:
-            val = re.sub(r'\\(.)', r'\1', m3.group(1))
-        return key, val
-
-    def _read_env(self):
-        with open(self.envfile) as fp:
-            return dict(self._parse_env_line(line.rstrip())
-                        for line in fp)
+        pwnam = pwd.getpwnam(self.user)
+        return {
+            'TERM': os.getenv('TERM'), 'SHELL': pwnam.pw_shell,
+            'USER': pwnam.pw_name, 'LOGNAME': pwnam.pw_name,
+            'HOME': pwnam.pw_dir
+            }
 
 
-def main():
-    options = docopt(__doc__)
-    runner = Runner(options['--name'] or 'unknown',
-                    options['<DIR>'], user=options['--user'],
-                    envfile=options['--env'],
-                    memlimit=options['--memlimit'])
-    runner.run([options['<COMMAND>']] + options['<ARGS>'])
+class _OutputReader(object):
+    """Read output from a file."""
+
+    def __init__(self, log, proc_name, file):
+        self.log = log
+        self.proc_name = proc_name
+        self.file = file
+        gevent.spawn(self._reader)
+
+    def _reader(self):
+        for line in self.file:
+            self.log.info(line.strip())
 
 
 if __name__ == '__main__':
-    main()
+    cmd = json.loads(sys.stdin.readline())
+    # setup logging
+    program = '%s[%s]' % (cmd['app'], cmd['name'])
+    format = "%(asctime)sZ " + program + ": %(message)s"
+    logging.basicConfig(level=logging.DEBUG, format=format,
+                        datefmt='%Y-%m-%dT%H:%M:%S')
+    logging.getLogger('').addHandler(SysLogHandler())
+    # fire up the program
+    r = Runner(cmd['app'], cmd['name'], cmd['dir'], cmd['user'])
+    r.start(cmd['config'], cmd['command'])

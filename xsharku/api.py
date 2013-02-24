@@ -82,7 +82,7 @@ class ProcResource(object):
         gevent.spawn(proc.start)
 
         response = Response(json=_build_proc(proc), status=201)
-        response.headers.add('Location', self.url('proc', id=proc.name))
+        response.headers.add('Location', self.url('proc', id=proc.id))
         return response
 
     def index(self, request, format=None):

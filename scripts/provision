@@ -13,16 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-BASEDIR=/var/lib/gilliam
-PROCDIR=$BASEDIR/proc
-TEMPLATE=$BASEDIR/template
-
-NAME=$1
-ROOTDIR=$PROCDIR/$NAME
+ROOTDIR=$1
 IMAGE=$2
-CONFIG=$3
-shift; shift; shift;
-COMMAND=$*
+TEMPLATE=/var/lib/gilliam/template
 
 set -e
 
@@ -42,11 +35,3 @@ mount --bind /dev/shm $ROOTDIR/dev/shm
 mkdir -p $ROOTDIR/app
 (cd $ROOTDIR/app && tar zxf $IMAGE)
 chroot $ROOTDIR /bin/chown -R gilliam:gilliam /app
-
-# Step 4. Copy in the config.
-#echo "set -a" >> $ROOTDIR/app/.profile
-#cat $CONFIG >> $ROOTDIR/app/.profile
-
-# Step 5. Final step. Start the process, as the app user.
-exec python -m xsharku.runner --name $NAME --env $CONFIG --user gilliam $ROOTDIR -- $COMMAND
-#exec chroot $ROOTDIR /bin/su -l gilliam -c "$COMMAND"
