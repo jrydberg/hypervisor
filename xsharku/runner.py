@@ -30,7 +30,10 @@ from logging.handlers import SysLogHandler
 import signal
 import sys
 import unshare
+from urlparse import urlparse
 import procname
+import socket
+import time
 
 
 class Container(EventEmitter):
@@ -145,11 +148,13 @@ class Runner(object):
     and monitoring the process.
     """
 
-    def __init__(self, app, name, dir, user, interval=1):
+    def __init__(self, log, app, name, dir, user, log_reader, interval=1):
+        self.log = log
         self.app = app
         self.name = name
         self.dir = dir
         self.user = user
+        self.log_reader = log_reader
         self._term_event = Event()
         self._process = None
         self._memlimit = None
@@ -186,8 +191,7 @@ class Runner(object):
             env=environ, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         # start the reader that consumers output from the process and
         # writes it to our log.
-        self._log_read = _OutputReader(logging.getLogger('output'), self.name,
-                                       self.popen.stdout)
+        self.log_reader(self.popen.stdout)
 
     def monitor(self):
         """Monitor the executed program."""
@@ -224,28 +228,54 @@ class Runner(object):
             }
 
 
-class _OutputReader(object):
-    """Read output from a file."""
+def output_reader(log, file):
+    """Read output from C{file} and write it to C{log}."""
+    # Read line by line and strip \n.
+    for line in file:
+        log.info(line[:-1])
 
-    def __init__(self, log, proc_name, file):
-        self.log = log
-        self.proc_name = proc_name
-        self.file = file
-        gevent.spawn(self._reader)
 
-    def _reader(self):
-        for line in self.file:
-            self.log.info(line.strip())
+def _parse_logsink(logsink):
+    url = urlparse(logsink)
+    if url.scheme in ('', 'file'):
+        return url.path, socket.SOCK_DGRAN
+    elif url.scheme in ('tcp',):
+        return (url.hostname, url.port), socket.SOCK_STREAM
+    elif url.scheme in ('udp,'):
+        return (url.hostname, url.port), socket.SOCK_DGRAM
+
+
+DEFAULT_FORMAT = "%(asctime)s.%(msecs)03dZ %(hostname)s %(appname)s %(procid)s %(msgid)s %(message)s"
+DEFAULT_DATEFMT = '%Y-%m-%dT%H:%M:%S'
 
 
 if __name__ == '__main__':
     cmd = json.loads(sys.stdin.readline())
+
     # setup logging
-    program = '%s[%s]' % (cmd['app'], cmd['name'])
-    format = "%(asctime)sZ " + program + ": %(message)s"
-    logging.basicConfig(level=logging.DEBUG, format=format,
-                        datefmt='%Y-%m-%dT%H:%M:%S')
-    logging.getLogger('').addHandler(SysLogHandler())
+    logging.basicConfig(level=logging.DEBUG)
+
+    address, socktype = _parse_logsink(os.getenv('LOGSINK'))
+    handler = SysLogHandler(address, socktype=socktype)
+
+    format = os.getenv('LOGFORMAT', DEFAULT_FORMAT)
+    datefmt = os.getenv('DATEFMT', DEFAULT_DATEFMT)
+    formatter = logging.Formatter(fmt=format, datefmt=datefmt)
+    formatter.converter = time.gmtime
+    handler.setFormatter(formatter)
+
+    # XXX: Very ugly, but a pragmantic workaround for now.  Before we
+    # change root we pull in the utf-8 coding so that it won't be
+    # loaded from the jail.
+    u''.encode('utf-8')
+
+    log = logging.getLogger('app')
+    log.addHandler(handler)
+    adapter = logging.LoggerAdapter(log, dict(
+            appname=cmd['app'], procid=cmd['name'],
+            hostname=socket.getfqdn(), msgid='-'))
+
     # fire up the program
-    r = Runner(cmd['app'], cmd['name'], cmd['dir'], cmd['user'])
+    r = Runner(adapter, cmd['app'], cmd['name'], cmd['dir'], cmd['user'],
+               partial(gevent.spawn, output_reader, adapter))
     r.start(cmd['config'], cmd['command'])
