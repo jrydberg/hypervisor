@@ -23,12 +23,13 @@ from requests.exceptions import RequestException
 import gevent
 
 
-def _build_proc(proc):
+def _build_proc(url, proc):
     """Build a proc representation."""
+    links = dict(self=url('proc', id=proc.id))
     return dict(app=proc.app, name=proc.name,
                 image=proc.image, config=proc.config,
                 port=proc.port, state=proc.state,
-                command=proc.command)
+                command=proc.command, links=links)
 
 
 class ProcResource(object):
@@ -81,7 +82,7 @@ class ProcResource(object):
         # a while instead?
         gevent.spawn(proc.start)
 
-        response = Response(json=_build_proc(proc), status=201)
+        response = Response(json=_build_proc(self.url, proc), status=201)
         response.headers.add('Location', self.url('proc', id=proc.id))
         return response
 
@@ -89,13 +90,13 @@ class ProcResource(object):
         """Return a representation of all procs."""
         collection = {}
         for id, proc in self.registry.iteritems():
-            collection[id] = _build_proc(proc)
+            collection[id] = _build_proc(self.url, proc)
         return Response(json=collection, status=200)
 
     def show(self, request, id, format=None):
         """Return a presentation of a proc."""
         proc = self._get(id)
-        return Response(json=_build_proc(proc), status=200)
+        return Response(json=_build_proc(self.url, proc), status=200)
 
     def delete(self, request, id, format=None):
         """Stop and delete process."""
