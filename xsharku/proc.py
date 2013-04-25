@@ -45,13 +45,7 @@ class Proc(EventEmitter):
     def start(self):
         """Provision a virtual machine for this proc."""
         self._container.on('state', self._set_state)
-        self._container.start(self._get_image(), self.config, self.command)
-
-    def _get_image(self):
-        """Retrieve the image from the cache and return an absolute
-        path to it.
-        """
-        return self.image_cache.get(self.image).get()
+        self._container.start(self.image, self.config, self.command)
 
     def stop(self):
         """Stop the container."""

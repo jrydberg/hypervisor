@@ -25,7 +25,7 @@ from glock.clock import Clock
 from xsharku.api import API
 from xsharku.image import ImageCache
 from xsharku.proc import ProcRegistry, Proc
-from xsharku.runner import Container, Runner
+from xsharku.runner import Container
 
 
 def main():
@@ -52,8 +52,7 @@ def main():
     def container_factory(id, app, name):
         logname = 'container.%s' % (id,)
         return Container(logging.getLogger(logname), clock,
-            script_dir, os.path.join(proc_dir, id), app, name,
-            'gilliam')
+            script_dir, id, app, name)
 
     def proc_factory(id, app, name, image, command, app_config, port):
         config = default_config.copy()

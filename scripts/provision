@@ -13,25 +13,98 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-ROOTDIR=$1
-IMAGE=$2
-TEMPLATE=/var/lib/gilliam/template
+NAME=$1
+APP=$2
+PROCNAME=$3
+IMAGE=$4
+ROOTDIR=/var/lib/lxc/$NAME
+ROOTFS=$ROOTDIR/rootfs
+SCRATCH=$ROOTDIR/scratch
+TEMPLATE=${TEMPLATE-/var/lib/gilliam/template}
+CACHE=/var/lib/gilliam/cache
+#CONSOLE=$ROOTDIR/console
 
 set -e
 
+# Fetch the image and store it in our cache.
+IMAGEID=`echo $IMAGE|md5sum -|cut -d' ' -f1`
+IMAGEDIR=$CACHE/$IMAGEID
+if ! [ -d $IMAGEDIR ]; then
+  mkdir -p $IMAGEDIR && curl -L $IMAGE | tar -zxf - -C $IMAGEDIR
+fi
+
+
+CONFIG=/tmp/lxc-template-$RANDOM
+SBININIT=`python -c "from xsharku import sbininit; print sbininit.__file__"|sed s/.pyc/.py/g`
+
+cat > $CONFIG <<EOF
+lxc.utsname = gilliam-$RANDOM
+
+# use a dedicated pts for the container (and limit the number of pseudo terminal
+# available)
+lxc.pts = 1024
+
+# disable the main console
+lxc.console = none
+
+# no controlling tty at all
+lxc.tty = 1
+
+# no implicit access to devices
+lxc.cgroup.devices.deny = a
+
+# /dev/null and zero
+lxc.cgroup.devices.allow = c 1:3 rwm
+lxc.cgroup.devices.allow = c 1:5 rwm
+
+# consoles
+lxc.cgroup.devices.allow = c 5:1 rwm
+lxc.cgroup.devices.allow = c 5:0 rwm
+lxc.cgroup.devices.allow = c 4:0 rwm
+lxc.cgroup.devices.allow = c 4:1 rwm
+
+# /dev/urandom,/dev/random
+lxc.cgroup.devices.allow = c 1:9 rwm
+lxc.cgroup.devices.allow = c 1:8 rwm
+
+# /dev/pts/* - pts namespaces are "coming soon"
+lxc.cgroup.devices.allow = c 136:* rwm
+lxc.cgroup.devices.allow = c 5:2 rwm
+
+# tuntap
+lxc.cgroup.devices.allow = c 10:200 rwm
+
+# standard mount point
+lxc.rootfs = $ROOTFS
+lxc.mount.entry = proc $ROOTFS/proc proc nosuid,nodev,noexec 0 0
+lxc.mount.entry = sysfs $ROOTFS/sys sysfs nosuid,nodev,noexec 0 0
+lxc.mount.entry = devpts $ROOTFS/dev/pts devpts newinstance,ptmxmode=0666,nosuid,noexec 0 0
+#lxc.mount.entry = varrun $ROOTFS/var/run tmpfs mode=755,size=4096k,nosuid,nodev,noexec 0 0
+#lxc.mount.entry = varlock $ROOTFS/var/lock tmpfs size=1024k,nosuid,nodev,noexec 0 0
+#lxc.mount.entry = shm $ROOTFS/dev/shm tmpfs size=65536k,nosuid,nodev,noexec 0 0
+lxc.mount.entry = $SBININIT $ROOTFS/sbin/init none bind,ro 0 0
+lxc.mount.entry = $IMAGEDIR $ROOTFS/app none bind,ro 0 0
+# In order to get a working DNS environment, mount bind (ro) the host's /etc/resolv.conf into the container
+lxc.mount.entry = /etc/resolv.conf $ROOTFS/etc/resolv.conf none bind,ro 0 0
+
+# drop linux capabilities (apply mainly to the user root in the container)
+lxc.cap.drop = audit_control audit_write mac_admin mac_override mknod setfcap setpcap sys_admin sys_boot sys_module sys_nice sys_pacct sys_rawio sys_resource sys_time sys_tty_config
+
+# limits
+lxc.cgroup.memory.limit_in_bytes = 1G
+lxc.cgroup.memory.soft_limit_in_bytes = 1G
+lxc.cgroup.memory.memsw.limit_in_bytes = 1G
+EOF
+
+#mkfifo $CONSOLE
+
+# Create the LXC container
+lxc-create -n $NAME -f $CONFIG
+
+# Mount stuff
+mkdir -p $SCRATCH
+mount -t aufs -o dirs=$SCRATCH=rw:$TEMPLATE=ro aufs $ROOTFS
+
 # Step 1. Copy the template
-cp -ra $TEMPLATE $ROOTDIR
-
-# Step 2. Mount key system directories.
-mount -t proc proc $ROOTDIR/proc
-mount -t sysfs sys $ROOTDIR/sys
-mount --bind /dev/pts $ROOTDIR/dev/pts
-mount --bind /dev/shm $ROOTDIR/dev/shm
-
-# Step 3. Extract the app.
-#
-# We need to chroot into the jail to be able to change ownership of
-# the files since the gilliam user only exists inside the jail.
-mkdir -p $ROOTDIR/app
-(cd $ROOTDIR/app && tar zxf $IMAGE)
-chroot $ROOTDIR /bin/chown -R gilliam:gilliam /app
+#cp -ra $TEMPLATE $ROOTFS
+mkdir -p $ROOTFS/app

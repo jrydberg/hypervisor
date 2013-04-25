@@ -34,38 +34,26 @@ from urlparse import urlparse
 import procname
 import socket
 import time
+import uuid
 
 
 class Container(EventEmitter):
     """The virtual machine."""
 
-    def __init__(self, log, clock, script_path, dir, app, name, user):
+    def __init__(self, log, clock, script_path, id, app, name):
         EventEmitter.__init__(self)
         self.log = log
         self.clock = clock
         self.script_path = script_path
-        self.dir = dir
         self.app = app
         self.name = name
-        self.user = user
         self.state = 'init'
         self.runner = None
+        self._name = '%s-%s-%s' % (id, app, name)
         
     def start(self, image, config, command):
         self._provision(image)
         self._spawn(config, command)
-
-    def _spawn(self, config, command):
-        self.runner = subprocess.Popen([sys.executable, '-m', __name__],
-            stdin=subprocess.PIPE) #stdout=subprocess.PIPE,
-        #    stderr=subprocess.STDOUT, cwd=self.dir)
-        self.runner.rawlink(partial(gevent.spawn, self._child))
-        self._set_state('running')
-        cmd = {'command': command, 'config': config,
-               'app': self.app, 'name': self.name, 'dir': self.dir,
-               'user': self.user}
-        self.runner.stdin.write(json.dumps(cmd) + '\n')
-        self.runner.stdin.close()
 
     # FIXME: I wish there was a decorator for this in gevent.
     def stop(self):
@@ -80,6 +68,21 @@ class Container(EventEmitter):
                     self.runner.kill()
         gevent.spawn(_stop)
 
+    def _run_script(self, script, *args):
+        """Run a script and return the Popen object."""
+        script_path = os.path.join(self.script_path, script)
+        return subprocess.Popen([script_path] + [str(arg) for arg in args],
+                                cwd=os.getcwd(), stdin=subprocess.PIPE)
+
+    def _spawn(self, config, command):
+        self.runner = self._run_script('start', self._name, self.app, self.name)
+        self.runner.rawlink(partial(gevent.spawn, self._child))
+        self._set_state('running')
+        cmd = {'command': command, 'config': config,
+               'app': self.app, 'name': self.name}
+        self.runner.stdin.write(json.dumps(cmd) + '\n')
+        self.runner.stdin.close()
+
     def _set_state(self, state):
         self.log.info("state changed to %r" % (state,))
         self.state = state
@@ -91,12 +94,10 @@ class Container(EventEmitter):
         self._cleanup().wait()
 
     def _provision(self, image):
-        script_path = os.path.join(self.script_path, 'provision')
         self._set_state('boot')
         try:
-            popen = subprocess.Popen([script_path, str(self.dir), str(image)],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                cwd=os.getcwd())
+            popen = self._run_script('provision', self._name, self.app, self.name,
+                                     image)
             popen.wait()
             # FIXME: xxx, resultcode
         except OSError:
@@ -104,178 +105,4 @@ class Container(EventEmitter):
             self._finish('fail')
 
     def _cleanup(self):
-        script_path = os.path.join(self.script_path, 'cleanup')
-        return subprocess.Popen([script_path, self.dir])
-
-
-# FIXME: This is for Ubuntu only and only tested on 12.04 LTS
-def sethostname(hostname):
-    """Set hostname to C{hostname}."""
-    from ctypes import CDLL
-    libc = CDLL('libc.so.6')
-    libc.sethostname(hostname, len(hostname))
-
-
-def waitany(objects, timeout=None):
-    """Wait for that any of the objects are triggered."""
-    result = AsyncResult()
-    for obj in objects:
-        obj.rawlink(result.set)
-    try:
-        return result.get(timeout=timeout)
-    finally:
-        for obj in objects:
-            unlink = getattr(obj, 'unlink', None)
-            if unlink:
-                try:
-                    unlink(result.set)
-                except:
-                    raise
-
-
-def chuser(user):
-    """Change user to whatever was specified."""
-    pwnam = pwd.getpwnam(user)
-    os.setgid(pwnam.pw_gid)
-    os.setegid(pwnam.pw_gid)
-    os.setuid(pwnam.pw_uid)
-    os.seteuid(pwnam.pw_uid)
-    os.chdir(pwnam.pw_dir)
-
-
-class Runner(object):
-    """The runner is responsible for starting the "proc" command
-    and monitoring the process.
-    """
-
-    def __init__(self, log, app, name, dir, user, log_reader, interval=1):
-        self.log = log
-        self.app = app
-        self.name = name
-        self.dir = dir
-        self.user = user
-        self.log_reader = log_reader
-        self._term_event = Event()
-        self._process = None
-        self._memlimit = None
-        self._interval = interval
-
-    def start(self, config, command):
-        self.prepare()
-        os.chdir(self.dir)
-        os.chroot(self.dir)
-        # FIXME: or should we get the name before chdir and chroot?
-        # change user _after_ we change root.  we do the "getpwnam"
-        # inside the jail.
-        chuser(self.user)
-        self.setup_signals()
-        self.execute(command, config)
-        return self.monitor()
-
-    def prepare(self):
-        # FIXME: we do not really need this I think.
-        unshare.unshare(unshare.CLONE_NEWUTS)
-        sethostname(self.name)
-        dir = os.path.basename(self.dir)
-        procname.setprocname("runner[%s]: %s %s" % (dir, self.app,
-                                                    self.name))
-
-    def setup_signals(self):
-        gevent.signal(signal.SIGTERM, self._term_event.set)
-        gevent.signal(signal.SIGINT, self._term_event.set)
-
-    def execute(self, command, environ):
-        """Execute the program."""
-        environ.update(self._make_environ())
-        self.popen = subprocess.Popen(['/bin/bash', '-l', '-c', command],
-            env=environ, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        # start the reader that consumers output from the process and
-        # writes it to our log.
-        self.log_reader(self.popen.stdout)
-
-    def monitor(self):
-        """Monitor the executed program."""
-        while True:
-            try:
-                event = waitany([self.popen.result, self._term_event],
-                                timeout=self._interval)
-            except gevent.Timeout:
-                self._monitor_usage()
-            else:
-                if event is self.popen.result:
-                    break
-                elif event is self._term_event:
-                    logging.info("GOT TERM EVENT")
-                    self.popen.terminate()
-                    break
-
-    def _monitor_usage(self):
-        if self._process is None:
-            self._process = psutil.Process(self.popen.pid)
-        meminfo = self._process.get_memory_info()
-        if self._memlimit and self._memlimit > meminfo.rss:
-            # Kill the proc ; it is exceeding the memory limit and we
-            # do not want that do we?
-            return True
-
-    def _make_environ(self):
-        """Construct an environment for the app."""
-        pwnam = pwd.getpwnam(self.user)
-        return {
-            'TERM': os.getenv('TERM'), 'SHELL': pwnam.pw_shell,
-            'USER': pwnam.pw_name, 'LOGNAME': pwnam.pw_name,
-            'HOME': pwnam.pw_dir
-            }
-
-
-def output_reader(log, file):
-    """Read output from C{file} and write it to C{log}."""
-    # Read line by line and strip \n.
-    for line in file:
-        log.info(line[:-1])
-
-
-def _parse_logsink(logsink):
-    url = urlparse(logsink)
-    if url.scheme in ('', 'file'):
-        return url.path, socket.SOCK_DGRAN
-    elif url.scheme in ('tcp',):
-        return (url.hostname, url.port), socket.SOCK_STREAM
-    elif url.scheme in ('udp,'):
-        return (url.hostname, url.port), socket.SOCK_DGRAM
-
-
-DEFAULT_FORMAT = "%(asctime)s.%(msecs)03dZ %(hostname)s %(appname)s %(procid)s %(msgid)s %(message)s"
-DEFAULT_DATEFMT = '%Y-%m-%dT%H:%M:%S'
-
-
-if __name__ == '__main__':
-    cmd = json.loads(sys.stdin.readline())
-
-    # setup logging
-    logging.basicConfig(level=logging.DEBUG)
-
-    address, socktype = _parse_logsink(os.getenv('LOGSINK'))
-    handler = SysLogHandler(address, socktype=socktype)
-
-    format = os.getenv('LOGFORMAT', DEFAULT_FORMAT)
-    datefmt = os.getenv('DATEFMT', DEFAULT_DATEFMT)
-    formatter = logging.Formatter(fmt=format, datefmt=datefmt)
-    formatter.converter = time.gmtime
-    handler.setFormatter(formatter)
-
-    # XXX: Very ugly, but a pragmantic workaround for now.  Before we
-    # change root we pull in the utf-8 coding so that it won't be
-    # loaded from the jail.
-    u''.encode('utf-8')
-
-    log = logging.getLogger('app')
-    log.addHandler(handler)
-    adapter = logging.LoggerAdapter(log, dict(
-            appname=cmd['app'], procid=cmd['name'],
-            hostname=socket.getfqdn(), msgid='-'))
-
-    # fire up the program
-    r = Runner(adapter, cmd['app'], cmd['name'], cmd['dir'], cmd['user'],
-               partial(gevent.spawn, output_reader, adapter))
-    r.start(cmd['config'], cmd['command'])
+        return self._run_script('cleanup', self._name, self.app, self.name)
