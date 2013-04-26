@@ -24,9 +24,14 @@ import gevent
 
 
 def _build_proc(url, proc):
-    """Build a proc representation."""
+    """Build a proc representation.
+
+    @param url: URL generator.
+
+    @return: C{dict}
+    """
     links = dict(self=url('proc', id=proc.id))
-    return dict(app=proc.app, name=proc.name,
+    return dict(id=proc.id, app=proc.app, name=proc.name,
                 image=proc.image, config=proc.config,
                 port=proc.port, state=proc.state,
                 command=proc.command, links=links)
@@ -35,21 +40,23 @@ def _build_proc(url, proc):
 class ProcResource(object):
     """Resource for our processes."""
 
-    def __init__(self, log, url, registry, factory, requests):
+    def __init__(self, log, url, registry, factory, httpclient):
         self.log = log
         self.url = url
         self.registry = registry
         self.factory = factory
-        self.requests = requests
+        self.httpclient = httpclient
 
     def create(self, request):
         """Create new proc."""
-        id = self._create_id()
         data = self._assert_request_data(request)
-        proc = self.factory(id, data['app'], data['name'],
+
+        proc = self.factory(self._create_id(),
+                            data['app'], data['name'],
                             data['image'], data['command'],
                             data['config'])
         self.registry.add(proc)
+
         proc.on('state', partial(self._state_callback, proc,
                                  data['callback']))
 
@@ -71,8 +78,7 @@ class ProcResource(object):
 
     def show(self, request, id):
         """Return a presentation of a proc."""
-        proc = self._get(id)
-        return Response(json=_build_proc(self.url, proc), status=200)
+        return Response(json=_build_proc(self.url, self._get(id)), status=200)
 
     def delete(self, request, id):
         """Stop and delete process."""
@@ -95,12 +101,14 @@ class ProcResource(object):
 
     def _state_callback(self, proc, callback_url, state):
         """Send state change to remote URL."""
-        params = {'name': proc.name, 'port': proc.port, 'state': state}
         self.log.info("send state update for proc %s new state %s" % (
                 proc.name, state))
         try:
-            response = self.requests.post(callback_url,
-                params=params, timeout=10, stream=False)
+            params = {'name': proc.name, 'port': proc.port, 'state': state}
+            response = self.httpclient.post(callback_url,
+                                            params=params,
+                                            timeout=10,
+                                            stream=False)
         except requests.Timeout:
             self.log.error("timeout while sending state change to %s" % (
                     callback_url))
@@ -117,14 +125,16 @@ class API(object):
 
     def __init__(self, log, registry, factory, requests):
         self.mapper = Mapper()
-        self.url = URLGenerator(mapper, {})
+        self.url = URLGenerator(self.mapper, {})
         self.resources = {
             'proc': ProcResource(log, self.url, registry, factory,
                                  requests),
             }
         self.mapper.collection("procs", "proc", controller='proc',
-            path_prefix='/proc', collection_actions=['index', 'create'],
-            member_actions=['show', 'delete'], formatted=False)
+                               path_prefix='/proc',
+                               collection_actions=['index', 'create'],
+                               member_actions=['show', 'delete'],
+                               formatted=False)
 
     @wsgify
     def __call__(self, request):

@@ -27,22 +27,22 @@ from xsharku.runner import Container
 
 
 class App(object):
-    """Class that holds functionality for wiring things together."""
+    """Class that holds functionality wiring for things together."""
 
     def __init__(self, clock, script_dir, base_config, port_pool,
-                 proc_registry, host, requests):
+                 proc_registry, host, httpclient):
         self.clock = clock
         self.script_dir = script_dir
         self.base_config = base_config
         self.port_pool = port_pool
         self.proc_registry = proc_registry
         self.host = host
-        self.requests = requests
+        self.httpclient = httpclient
 
     def create_api(self):
         """Create and return API WSGI application."""
         return API(logging.getLogger('api'), self.proc_registry,
-                   self._create_proc, self.requests)
+                   self._create_proc, self.httpclient)
 
     def _create_proc(id, app, name, image, command, app_config):
         """Create proc based on provided parameters."""
@@ -67,15 +67,15 @@ class App(object):
 
 
 def main():
-    # get logging running
+    # logging
     format = '%(levelname)-8s %(name)s: %(message)s'
     logging.basicConfig(level=logging.DEBUG, format=format)
 
-    # setup config
+    # config
     options = os.environ
     script_dir = os.path.join(os.getcwd(), options['SCRIPT_DIR'])
-    base_port = int(options.get('BASE_PORT', 49153))
-    max_procs = int(options.get('MAX_PROCS', 65535 - 49153))
+    base_port = int(options.get('BASE_PORT', 10000))
+    max_procs = int(options.get('MAX_PROCS', 100))
     port = int(options['PORT'])
 
     # wiring
