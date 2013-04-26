@@ -123,9 +123,9 @@ class ProcResource(object):
 class API(object):
     """The REST API that we expose."""
 
-    def __init__(self, log, registry, factory, requests):
+    def __init__(self, log, registry, factory, requests, environ):
         self.mapper = Mapper()
-        self.url = URLGenerator(self.mapper, {})
+        self.url = URLGenerator(self.mapper, environ)
         self.resources = {
             'proc': ProcResource(log, self.url, registry, factory,
                                  requests),

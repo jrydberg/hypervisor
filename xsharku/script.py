@@ -47,8 +47,7 @@ class App(object):
     def _create_proc(id, app, name, image, command, app_config):
         """Create proc based on provided parameters."""
         port = self.port_pool.allocate()
-        return Proc(logging.getLogger('proc.%s' % (id,)),
-                    clock, self._create_container(id, app, name),
+        return Proc(clock, self._create_container(id, app, name),
                     id, app, name, image, command,
                     self._prepare_config(app_config, port),
                     port_pool, port)

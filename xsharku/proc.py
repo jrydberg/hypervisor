@@ -19,10 +19,9 @@ import random
 class Proc(EventEmitter):
     """Representation of a "proc" (aka process)."""
 
-    def __init__(self, log, clock, container, id, app, name,
+    def __init__(self, clock, container, id, app, name,
                  image, command, config, port_pool, port):
         EventEmitter.__init__(self)
-        self.log = log
         self.clock = clock
         self.id = id
         self.app = app
@@ -86,7 +85,7 @@ class PortPool(object):
         self.free.add(port)
 
 
-class ProcRegistry(dict):
+class ProcRegistry(object):
     """Simple registry over processes."""
 
     def __init__(self, proc_factory, port_pool):
