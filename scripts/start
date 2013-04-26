@@ -1,5 +1,5 @@
-#!/bin/bash
-# Copyright 2013 Johan Rydberg.
+#!/usr/bin/env python
+# Copyright 2013 Johan Rydberg. -*- python -*-
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,11 +13,80 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-NAME=$1
-APP=$2
-PROCNAME=$3
-ROOTDIR=/var/lib/lxc/$NAME
+"""This is a simple script that starts the container using lxc-start.
+The output from lxc-start is attached to a running instance of the
+'logger' command.
 
-LOGTAG="$APP[$PROCNAME]"
-#logger -t $LOGTAG < $CONSOLE &
-lxc-start -n $NAME
+Note that this could have been a simple shell script (lxc-start piped
+into logger) but I never got it working for some reason.  This seem to
+work though.
+"""
+
+from gevent.event import Event, AsyncResult
+from gevent import subprocess
+import gevent
+import signal
+import sys
+import os
+
+
+def waitany(objects, timeout=None):
+    """Wait for that any of the objects are triggered."""
+    result = AsyncResult()
+    for obj in objects:
+        obj.rawlink(result.set)
+    try:
+        return result.get(timeout=timeout)
+    finally:
+        for obj in objects:
+            unlink = getattr(obj, 'unlink', None)
+            if unlink:
+                try:
+                    unlink(result.set)
+                except:
+                    raise
+
+
+class Runner(object):
+    """The runner is responsible for starting the "lxc-start" command
+    and monitoring the process.
+    """
+
+    def __init__(self, name, logtag, interval=1):
+        self.logtag = logtag
+        self.name = name
+        self._term_event = Event()
+        self._read, self._write = os.pipe()
+        self._interval = interval
+
+    def _init(self):
+        gevent.signal(signal.SIGTERM, self._term_event.set)
+        gevent.signal(signal.SIGINT, self._term_event.set)
+
+    def start(self, *args):
+        self._init()
+        self.logger = subprocess.Popen(['logger', '-t', self.logtag],
+                                       stdin=self._read)
+        self.runner = subprocess.Popen(args,
+                                       stdout=self._write,
+                                       stderr=subprocess.STDOUT)
+
+    def monitor(self):
+        """Monitor the executed program."""
+        event = waitany([self.logger.result, 
+                         self.runner.result,
+                         self._term_event])
+        self.runner.terminate()
+        self.logger.terminate()
+        gevent.sleep(1)
+        if self.runner.returncode is None:
+            self.runner.kill()
+        if self.logger.returncode is None:
+            self.logger.kill()
+
+
+if __name__ == '__main__':
+    name, app, procname = sys.argv[1:]
+    runner = Runner(name, '%s[%s]' % (app, procname))
+    runner.start('lxc-start', '-n', name)
+    runner.monitor()

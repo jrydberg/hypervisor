@@ -39,18 +39,18 @@ class App(object):
         self.host = host
         self.httpclient = httpclient
 
-    def create_api(self):
+    def create_api(self, environ):
         """Create and return API WSGI application."""
         return API(logging.getLogger('api'), self.proc_registry,
-                   self._create_proc, self.httpclient)
+                   self._create_proc, self.httpclient, environ)
 
-    def _create_proc(id, app, name, image, command, app_config):
+    def _create_proc(self, id, app, name, image, command, config):
         """Create proc based on provided parameters."""
         port = self.port_pool.allocate()
-        return Proc(clock, self._create_container(id, app, name),
+        return Proc(self.clock, self._create_container(id, app, name),
                     id, app, name, image, command,
-                    self._prepare_config(app_config, port),
-                    port_pool, port)
+                    self._prepare_config(config, port),
+                    self.port_pool, port)
 
     def _create_container(self, id, app, name):
         """Create container based on provided parameters."""
@@ -79,10 +79,10 @@ def main():
 
     # wiring
     port_pool = PortPool((base_port + i) for i in range(max_procs))
-    proc_registry = ProcRegistry(proc_factory, ports)
+    proc_registry = ProcRegistry()
     app = App(Clock(), script_dir, {}, port_pool, proc_registry,
               socket.getfqdn(), requests.Session())
-    pywsgi.WSGIServer(('', port), app.create_api()).serve_forever()
+    pywsgi.WSGIServer(('', port), app.create_api({})).serve_forever()
 
 
 if __name__ == '__main__':

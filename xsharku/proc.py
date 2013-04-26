@@ -60,8 +60,8 @@ class PortPool(object):
     procs."""
 
     def __init__(self, ports, choice=random.choice):
-        self.free = set(ports)
-        self.busy = set()
+        self.free = list(ports)
+        self.busy = list()
         self.choice = choice
 
     def allocate(self):
@@ -71,26 +71,24 @@ class PortPool(object):
 
         @raise PortPoolError: when a port could not be allocated.
         """
-        if not self.ports:
+        if not self.free:
             raise PortPoolError("out of ports")
         port = self.choice(self.free)
         self.free.remove(port)
-        self.busy.add(port)
+        self.busy.append(port)
         return port
 
     def release(self, port):
         """Release port back to pool."""
         assert port in self.busy, "port was not allocated"
         self.busy.remove(port)
-        self.free.add(port)
+        self.free.append(port)
 
 
 class ProcRegistry(object):
     """Simple registry over processes."""
 
-    def __init__(self, proc_factory, port_pool):
-        self.proc_factory = proc_factory
-        self.port_pool = port_pool
+    def __init__(self):
         self._store = {}
 
     def get(self, id):
@@ -103,7 +101,7 @@ class ProcRegistry(object):
     def remove(self, proc):
         """Remove proc from the registry."""
         assert proc.id in self._store, "proc not in registry"
-        self._store.remove(proc.id)
+        del self._store[proc.id]
 
     def items(self):
         """Return a sequence (id, proc) pairs representing the content

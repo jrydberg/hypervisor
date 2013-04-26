@@ -17,6 +17,7 @@ NAME=$1
 ROOTDIR=/var/lib/lxc/$NAME
 ROOTFS=$ROOTDIR/rootfs
 
+lxc-stop -n $NAME
 umount -f $ROOTFS
 lxc-destroy -n $NAME
 
