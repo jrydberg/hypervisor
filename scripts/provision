@@ -22,7 +22,6 @@ ROOTFS=$ROOTDIR/rootfs
 SCRATCH=$ROOTDIR/scratch
 TEMPLATE=${TEMPLATE-/var/lib/gilliam/template}
 CACHE=/var/lib/gilliam/cache
-#CONSOLE=$ROOTDIR/console
 
 set -e
 
@@ -35,10 +34,10 @@ fi
 
 
 CONFIG=/tmp/lxc-template-$RANDOM
-SBININIT=`python -c "from xsharku import sbininit; print sbininit.__file__"|sed s/.pyc/.py/g`
+SBININIT=`dirname $0`/sysinit
 
 cat > $CONFIG <<EOF
-lxc.utsname = gilliam-$RANDOM
+lxc.utsname = $NAME
 
 # use a dedicated pts for the container (and limit the number of pseudo terminal
 # available)
@@ -96,15 +95,9 @@ lxc.cgroup.memory.soft_limit_in_bytes = 1G
 lxc.cgroup.memory.memsw.limit_in_bytes = 1G
 EOF
 
-#mkfifo $CONSOLE
-
 # Create the LXC container
 lxc-create -n $NAME -f $CONFIG
 
 # Mount stuff
-mkdir -p $SCRATCH
+mkdir -p $SCRATCH $SCRATCH/app
 mount -t aufs -o dirs=$SCRATCH=rw:$TEMPLATE=ro aufs $ROOTFS
-
-# Step 1. Copy the template
-#cp -ra $TEMPLATE $ROOTFS
-mkdir -p $ROOTFS/app

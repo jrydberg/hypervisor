@@ -14,49 +14,51 @@
 
 from functools import partial
 import gevent
-from gevent.event import Event, AsyncResult
-from gevent.os import make_nonblocking, nb_read, nb_write
-from gevent.hub import get_hub
 from gevent import subprocess
 import json
 from pyee import EventEmitter
 import os
 import os.path
-import pwd
-import psutil
-import re
-import logging
-from logging.handlers import SysLogHandler
-import signal
-import sys
-import unshare
-from urlparse import urlparse
-import procname
-import socket
-import time
-import uuid
 
 
 class Container(EventEmitter):
     """The virtual machine."""
 
-    def __init__(self, log, clock, script_path, id, app, name):
+    def __init__(self, log, clock, script_path, id, app, name,
+                 popen=subprocess.Popen):
         EventEmitter.__init__(self)
         self.log = log
         self.clock = clock
         self.script_path = script_path
         self.app = app
         self.name = name
-        self.state = 'init'
         self.runner = None
         self._name = '%s-%s-%s' % (id, app, name)
+        self._popen = popen
         
-    def start(self, image, config, command):
+    def start(self, image, command, env):
+        """Start container.
+
+        @param image: Image that will populate the container.
+        @type image: C{str}
+
+        @param command: The command to execute inside the container.
+        @type command: C{str}
+
+        @param env: Environment for the command.
+        @type env: C{dict}
+        """
         self._provision(image)
-        self._spawn(config, command)
+        self._spawn(env, command)
 
     # FIXME: I wish there was a decorator for this in gevent.
     def stop(self):
+        """Stop the container.
+
+        Note that this method returns right away.  If you want to get
+        notified of when the container is actually stopped, watch for
+        state changes.
+        """
         def _stop():
             for tosleep in [1, 3, 5]:
                 if self.runner is None:
@@ -68,41 +70,44 @@ class Container(EventEmitter):
                     self.runner.kill()
         gevent.spawn(_stop)
 
-    def _run_script(self, script, *args):
-        """Run a script and return the Popen object."""
-        script_path = os.path.join(self.script_path, script)
-        return subprocess.Popen([script_path] + [str(arg) for arg in args],
-                                cwd=os.getcwd(), stdin=subprocess.PIPE)
+    def _provision(self, image):
+        """Provision a new container with the specified image."""
+        try:
+            self._set_state('boot')
+            # FIXME (jrydberg): We should check returncode here.
+            self._run_script('provision', self._name, self.app, self.name,
+                             image).wait()
+        except OSError:
+            self.log.exception('fail to spawn provisioning script')
+            self._set_state('fail')
 
-    def _spawn(self, config, command):
+    def _spawn(self, env, command):
+        """Execute command inside container with the given environment."""
         self.runner = self._run_script('start', self._name, self.app, self.name)
         self.runner.rawlink(partial(gevent.spawn, self._child))
         self._set_state('running')
-        cmd = {'command': command, 'config': config,
-               'app': self.app, 'name': self.name}
-        self.runner.stdin.write(json.dumps(cmd) + '\n')
+        self.runner.stdin.write(json.dumps({'command': command, 'env': env}))
         self.runner.stdin.close()
 
-    def _set_state(self, state):
-        self.log.info("state changed to %r" % (state,))
-        self.state = state
-        self.emit('state', state)
-
     def _child(self, popen):
+        """Handler that gets called when our 'start' script finishes."""
         self.runner = None
         self._set_state('done' if not popen.returncode else 'fail')
         self._cleanup().wait()
 
-    def _provision(self, image):
-        self._set_state('boot')
-        try:
-            popen = self._run_script('provision', self._name, self.app, self.name,
-                                     image)
-            popen.wait()
-            # FIXME: xxx, resultcode
-        except OSError:
-            self.log.exception('fail to spawn provisioning script')
-            self._finish('fail')
-
     def _cleanup(self):
+        """Clean up and dispose container."""
         return self._run_script('cleanup', self._name, self.app, self.name)
+
+    def _set_state(self, state):
+        self.log.info("state changed to %r" % (state,))
+        self.emit('state', state)
+
+    def _run_script(self, script, *args):
+        """Run a script and return the Popen object.
+
+        @return: a L{subprocess.Popen} object.
+        """
+        script_path = os.path.join(self.script_path, script)
+        return self._popen([script_path] + [str(arg) for arg in args],
+                           cwd=os.getcwd(), stdin=subprocess.PIPE)

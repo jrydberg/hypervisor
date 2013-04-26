@@ -35,11 +35,56 @@ def _build_proc(url, proc):
 class ProcResource(object):
     """Resource for our processes."""
 
-    def __init__(self, log, mapper, proc_registry, requests):
+    def __init__(self, log, url, registry, factory, requests):
         self.log = log
-        self.registry = proc_registry
+        self.url = url
+        self.registry = registry
+        self.factory = factory
         self.requests = requests
-        self.url = URLGenerator(mapper, {})
+
+    def create(self, request):
+        """Create new proc."""
+        id = self._create_id()
+        data = self._assert_request_data(request)
+        proc = self.factory(id, data['app'], data['name'],
+                            data['image'], data['command'],
+                            data['config'])
+        self.registry.add(proc)
+        proc.on('state', partial(self._state_callback, proc,
+                                 data['callback']))
+
+        # We start the processes in a separate greenlet so that we do
+        # not have to wait for it to spin up.  Should we do this after
+        # a while instead?
+        gevent.spawn(proc.start)
+
+        response = Response(json=_build_proc(self.url, proc), status=201)
+        response.headers.add('Location', self.url('proc', id=proc.id))
+        return response
+
+    def index(self, request):
+        """Return a representation of all procs."""
+        collection = {}
+        for id, proc in self.registry.items():
+            collection[id] = _build_proc(self.url, proc)
+        return Response(json=collection, status=200)
+
+    def show(self, request, id):
+        """Return a presentation of a proc."""
+        proc = self._get(id)
+        return Response(json=_build_proc(self.url, proc), status=200)
+
+    def delete(self, request, id):
+        """Stop and delete process."""
+        proc = self._get(id)
+        self.registry.remove(proc)
+        proc.dispose()
+        return Response(status=204)
+
+    def _assert_request_data(self, request):
+        if not request.json:
+            raise HTTPBadRequest()
+        return request.json
 
     def _get(self, id):
         """Return process with given ID or C{None}."""
@@ -48,15 +93,9 @@ class ProcResource(object):
             raise HTTPNotFound()
         return proc
 
-    def _assert_request_data(self, request):
-        if not request.json:
-            raise HTTPBadRequest()
-        return request.json
-
     def _state_callback(self, proc, callback_url, state):
         """Send state change to remote URL."""
-        params = {'name': proc.name, 'port': proc.port,
-                  'state': state}
+        params = {'name': proc.name, 'port': proc.port, 'state': state}
         self.log.info("send state update for proc %s new state %s" % (
                 proc.name, state))
         try:
@@ -68,56 +107,24 @@ class ProcResource(object):
         except RequestException:
             self.log.exception("could not send state update")
 
-    def create(self, request, **kwargs):
-        """Create new proc."""
-        data = self._assert_request_data(request)
-        id = str(uuid.uuid4())
-        proc = self.registry.create(id, data['app'], data['name'],
-            data['image'], data['command'], data['config'])
-        proc.on('state', partial(self._state_callback, proc,
-            data['callback']))
-
-        # we start the processes in a separate greenlet so that we do
-        # not have to wait for it to spin up.  should we do this after
-        # a while instead?
-        gevent.spawn(proc.start)
-
-        response = Response(json=_build_proc(self.url, proc), status=201)
-        response.headers.add('Location', self.url('proc', id=proc.id))
-        return response
-
-    def index(self, request, format=None):
-        """Return a representation of all procs."""
-        collection = {}
-        for id, proc in self.registry.iteritems():
-            collection[id] = _build_proc(self.url, proc)
-        return Response(json=collection, status=200)
-
-    def show(self, request, id, format=None):
-        """Return a presentation of a proc."""
-        proc = self._get(id)
-        return Response(json=_build_proc(self.url, proc), status=200)
-
-    def delete(self, request, id, format=None):
-        """Stop and delete process."""
-        proc = self._get(id)
-        proc.stop()
-        self.registry.remove(proc)
-        return Response(status=204)
+    def _create_id(self):
+        """Create a new ID for the proc."""
+        return str(uuid.uuid4())
 
 
 class API(object):
     """The REST API that we expose."""
 
-    def __init__(self, log, proc_registry, requests):
+    def __init__(self, log, registry, factory, requests):
         self.mapper = Mapper()
+        self.url = URLGenerator(mapper, {})
         self.resources = {
-            'proc': ProcResource(log, self.mapper, proc_registry,
+            'proc': ProcResource(log, self.url, registry, factory,
                                  requests),
             }
         self.mapper.collection("procs", "proc", controller='proc',
             path_prefix='/proc', collection_actions=['index', 'create'],
-            member_actions=['show', 'delete'])
+            member_actions=['show', 'delete'], formatted=False)
 
     @wsgify
     def __call__(self, request):

@@ -19,55 +19,71 @@ import os
 import socket
 
 import requests
-from functools import partial
 from glock.clock import Clock
 
 from xsharku.api import API
-from xsharku.image import ImageCache
-from xsharku.proc import ProcRegistry, Proc
+from xsharku.proc import ProcRegistry, Proc, PortPool
 from xsharku.runner import Container
+
+
+class App(object):
+    """Class that holds functionality for wiring things together."""
+
+    def __init__(self, clock, script_dir, base_config, port_pool,
+                 proc_registry, host, requests):
+        self.clock = clock
+        self.script_dir = script_dir
+        self.base_config = base_config
+        self.port_pool = port_pool
+        self.proc_registry = proc_registry
+        self.host = host
+        self.requests = requests
+
+    def create_api(self):
+        """Create and return API WSGI application."""
+        return API(logging.getLogger('api'), self.proc_registry,
+                   self._create_proc, self.requests)
+
+    def _create_proc(id, app, name, image, command, app_config):
+        """Create proc based on provided parameters."""
+        port = self.port_pool.allocate()
+        return Proc(logging.getLogger('proc.%s' % (id,)),
+                    clock, self._create_container(id, app, name),
+                    id, app, name, image, command,
+                    self._prepare_config(app_config, port),
+                    port_pool, port)
+
+    def _create_container(self, id, app, name):
+        """Create container based on provided parameters."""
+        logname = 'container.%s' % (id,)
+        return Container(logging.getLogger(logname), self.clock,
+                         self.script_dir, id, app, name)
+
+    def _prepare_config(self, app_config, port):
+        config = self.base_config.copy()
+        config.update(app_config)
+        config.update({'PORT': str(port), 'HOST': self.host})
+        return config
 
 
 def main():
     # get logging running
     format = '%(levelname)-8s %(name)s: %(message)s'
     logging.basicConfig(level=logging.DEBUG, format=format)
+
     # setup config
     options = os.environ
-    cache_dir = os.path.join(os.getcwd(), options['IMAGE_DIR'])
     script_dir = os.path.join(os.getcwd(), options['SCRIPT_DIR'])
-    proc_dir = os.path.join(os.getcwd(), options['PROC_DIR'])
-    base_port = int(options['BASE_PORT'])
-    exports = options.get('EXPORTS', '').split(',')
-    max_procs = int(options.get('MAX_PROCS', '8'))
-    # default config
-    default_config = {}
-    for var in exports:
-        if var in os.environ:
-            default_config[var] = os.environ[var]
+    base_port = int(options.get('BASE_PORT', 49153))
+    max_procs = int(options.get('MAX_PROCS', 65535 - 49153))
+    port = int(options['PORT'])
+
     # wiring
-    clock = Clock()
-    image_cache = ImageCache(cache_dir)
-
-    def container_factory(id, app, name):
-        logname = 'container.%s' % (id,)
-        return Container(logging.getLogger(logname), clock,
-            script_dir, id, app, name)
-
-    def proc_factory(id, app, name, image, command, app_config, port):
-        config = default_config.copy()
-        config.update(app_config)
-        config.update({'PORT': str(port), 'HOST': socket.getfqdn()})
-        return Proc(logging.getLogger('proc.%s' % (id,)),
-            clock, image_cache, container_factory(id, app, name),
-            id, app, name, image, command, config, port)
-
-    ports = [(base_port + i) for i in range(max_procs)]
+    port_pool = PortPool((base_port + i) for i in range(max_procs))
     proc_registry = ProcRegistry(proc_factory, ports)
-    app = API(logging.getLogger('api'), proc_registry, requests.Session())
-    # serve
-    logging.info("Start serving requests on %d" % (int(options['PORT']),))
-    pywsgi.WSGIServer(('', int(options['PORT'])), app).serve_forever()
+    app = App(Clock(), script_dir, {}, port_pool, proc_registry,
+              socket.getfqdn(), requests.Session())
+    pywsgi.WSGIServer(('', port), app.create_api()).serve_forever()
 
 
 if __name__ == '__main__':
