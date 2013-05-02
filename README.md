@@ -1,25 +1,29 @@
 # The Hypervisor
 
-This is a really chrootin proof-of-content hypevisor for Gilliam.
-"procs" (applications running inside an somewhat isolated container).
+This is a simple hypervisor for Gilliam.  The hypervisor itself is
+agnostic to virtualization technique; all that magic is implemented in
+a set of shell scripts living in `scripts/`.  The hypervisor comes
+with scripts that will start the applications in a LXC container.
 
-Right now it is not possible to install the beast, so you need do some
-hackery to get it working:
+# Installation
 
-First set up your virtualenv and install the requirements.
+First set up your virtualenv and install the requirements:
 
-    $ virtualenv .
-    $ bin/pip install -r requirements.txt
+    virtualenv .
+    bin/pip install -r requirements.txt
 
 Now you can start the hypervisor with this intuitive commandline:
 
-    $ sudo -s
-    # . bin/activate
-    # export PYTHONPATH=$PWD
-    # honcho start -p 9000
+    sudo -s
+    . bin/activate
+    export PYTHONPATH=$PWD
+    honcho start -p 9000
 
 Don't forget to set up your template container. 
 
+# Integration Scripts
+
+TBD.
 
 # Preparing Template Container
 
@@ -60,14 +64,3 @@ All done.
 
 The `provision` script will take care of mounting `/proc` and other key
 file systems.
-
-# Template Container using mount --bind
-
-It is also possible to hash the `provision` and `cleanup` scripts (we
-should really provide examples of this) to mount the host systems
-`/usr` and `/bin` directories using `mount --bind`.  This is a lot
-faster than copying a large template installation.  It also saves you
-a ton of space. *But* data from the host environment may leak into the
-container, plus you there's a risk of wiping the hosts installation if
-you manage to do a `rm -rf` on the container without unmounting the
-bindings.
