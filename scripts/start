@@ -28,6 +28,10 @@ import gevent
 import signal
 import sys
 import os
+import functools
+
+
+TERM_TIMEOUT = 10
 
 
 def waitany(objects, timeout=None):
@@ -47,6 +51,31 @@ def waitany(objects, timeout=None):
                     raise
 
 
+def _terminate(process, timeout):
+    """Terminate the given process by sending it SIGTERM.
+
+    If it has not died withing C{timeout} seconds, kill it with
+    SIGKILL.
+    """
+    try:
+        process.terminate()
+        try:
+            process.result.get(timeout=timeout)
+        except gevent.Timeout:
+            process.kill()
+    except OSError:
+        # The thing has most likely already exited (it crashed and
+        # burned?).
+        pass
+
+
+def async(f):
+    @functools.wraps(f)
+    def wrapped(*args, **kw):
+        return gevent.spawn(f, *args, **kw)
+    return wrapped
+
+
 class Runner(object):
     """The runner is responsible for starting the "lxc-start" command
     and monitoring the process.
@@ -59,9 +88,20 @@ class Runner(object):
         self._read, self._write = os.pipe()
         self._interval = interval
 
+    @async
+    def _stop(self, *event):
+        """Stop the container."""
+        if self.runner.returncode is None:
+            subprocess.call(['lxc-kill', '-n', self.name, 
+                             str(signal.SIGTERM)])
+            try:
+                self.runner.result.get(timeout=TERM_TIMEOUT)
+            except gevent.Timeout:
+                subprocess.call(['lxc-stop', '-n', self.name])
+
     def _init(self):
-        gevent.signal(signal.SIGTERM, self._term_event.set)
-        gevent.signal(signal.SIGINT, self._term_event.set)
+        gevent.signal(signal.SIGTERM, self._stop)
+        gevent.signal(signal.SIGINT, self._stop)
 
     def start(self, *args):
         self._init()
@@ -69,24 +109,22 @@ class Runner(object):
                                        stdin=self._read)
         self.runner = subprocess.Popen(args,
                                        stdout=self._write,
-                                       stderr=subprocess.STDOUT)
+                                       stderr=subprocess.STDOUT,
+                                       close_fds=True)
 
     def monitor(self):
         """Monitor the executed program."""
         event = waitany([self.logger.result, 
-                         self.runner.result,
-                         self._term_event])
-        self.runner.terminate()
-        self.logger.terminate()
-        gevent.sleep(1)
-        if self.runner.returncode is None:
-            self.runner.kill()
-        if self.logger.returncode is None:
-            self.logger.kill()
+                         self.runner.result])
+        if event is not self.runner.result:
+            self._stop().get()
+        if event is not self.logger.result:
+            _terminate(self.logger, TERM_TIMEOUT)
+        return self.runner.returncode
 
 
 if __name__ == '__main__':
     name, app, procname = sys.argv[1:]
     runner = Runner(name, '%s[%s]' % (app, procname))
     runner.start('lxc-start', '-n', name)
-    runner.monitor()
+    sys.exit(runner.monitor())

@@ -37,14 +37,14 @@ CONFIG=/tmp/lxc-template-$RANDOM
 SBININIT=`dirname $0`/sysinit
 
 cat > $CONFIG <<EOF
-lxc.utsname = $NAME
+lxc.utsname = $APP-$PROCNAME
 
 # use a dedicated pts for the container (and limit the number of pseudo terminal
 # available)
 lxc.pts = 1024
 
 # disable the main console
-lxc.console = none
+#lxc.console = none
 
 # no controlling tty at all
 lxc.tty = 1
