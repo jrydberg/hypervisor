@@ -105,10 +105,8 @@ class ProcResource(object):
                 proc.name, state))
         try:
             params = {'name': proc.name, 'port': proc.port, 'state': state}
-            response = self.httpclient.post(callback_url,
-                                            params=params,
-                                            timeout=10,
-                                            stream=False)
+            self.httpclient.post(callback_url, params=params,
+                                 timeout=10, stream=False)
         except requests.Timeout:
             self.log.error("timeout while sending state change to %s" % (
                     callback_url))
