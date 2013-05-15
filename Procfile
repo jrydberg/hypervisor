@@ -1,1 +1,1 @@
-api: bin/api
+api: PYTHONPATH=$PWD bin/api
