@@ -1,1 +1,1 @@
-api: python -m xsharku.script
+api: bin/api
