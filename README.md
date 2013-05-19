@@ -5,6 +5,8 @@ agnostic to virtualization technique; all that magic is implemented in
 a set of shell scripts living in `scripts/`.  The hypervisor comes
 with scripts that will start the applications in a LXC container.
 
+[![Build Status](https://travis-ci.org/gilliam/hypervisor.png)](https://travis-ci.org/gilliam/hypervisor)
+
 # Installation
 
 First set up your virtualenv and install the requirements:
