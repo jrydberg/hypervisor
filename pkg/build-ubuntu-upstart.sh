@@ -28,19 +28,16 @@ git archive --format=tar ${HEAD} | tar -C ${BUILDDIR}/${INSTALLDIR} -xf -
 cd ${BUILDDIR}/${INSTALLDIR}
 virtualenv .
 ./bin/pip install --use-mirrors -r requirements.txt
-./bin/honcho export -d ${INSTALLDIR} -p ${PORT} -l /var/log/gilliam \
-	     -a gilliam-hypervisor -u root -s /bin/bash upstart ${BUILDDIR}
 for SCRIPT in bin/*; do
   sed -i -e "s:#\!.*python$:#\!${INSTALLDIR}/bin/python:" $SCRIPT
 done
 
 cd ${BUILDDIR}
 mkdir -p etc/init etc/default
-mv gilliam-hypervisor*.conf etc/init/
-mv gilliam-hypervisor-api etc/default
+cp ${TOPDIR}/pkg/gilliam-hypervisor.conf etc/init/
 # FIXME(jrydberg): for some reason the default file is empty from time
 # to time. copy over the original.
-cp ${TOPDIR}/.env etc/default/gilliam-hypervisor-api
+cp ${TOPDIR}/.env etc/default/gilliam-hypervisor
 
 cd ${TOPDIR}
 fpm -s dir -t deb -n gilliam-hypervisor -v ${VERSION} -d lxc -C ${BUILDDIR} .
